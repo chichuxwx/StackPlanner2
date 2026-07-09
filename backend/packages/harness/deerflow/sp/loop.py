@@ -8,7 +8,7 @@ from typing import Any, Protocol
 
 from deerflow.sp.actions import ActionRouter, HandlerNextStep, HandlerResult, SPAction, build_default_action_router
 from deerflow.sp.actions.events import make_sp_event
-from deerflow.sp.central import CENTRAL_AGENT_ACTION_PROMPT
+from deerflow.sp.central.prompt import CENTRAL_AGENT_ACTION_PROMPT
 from deerflow.sp.memory import TaskMemoryStack
 from deerflow.sp.prompt import PromptContextBuilder
 
