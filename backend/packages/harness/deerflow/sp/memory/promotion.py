@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -12,6 +12,7 @@ from deerflow.sp.memory.stack import TaskMemoryStack
 
 MemoryCandidateKind = Literal["user_preference", "fact", "correction", "behavior", "sop", "agent_style", "failure_pattern"]
 MemoryCandidateScope = Literal["user", "agent", "project", "global"]
+PromotionStatus = Literal["approved", "rejected", "written"]
 
 _STABLE_MARKERS = (
     "以后",
@@ -105,6 +106,148 @@ class MemoryCandidate:
             "reason": self.reason,
             "metadata": _json_safe(self.metadata),
         }
+
+
+@dataclass(slots=True)
+class MemoryPromotionDecision:
+    """Code-gated decision for a long-term memory promotion candidate."""
+
+    candidate: MemoryCandidate
+    status: PromotionStatus
+    reason: str
+    dry_run: bool = True
+    write_result: Any | None = None
+
+    @property
+    def approved(self) -> bool:
+        return self.status in {"approved", "written"}
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "candidate": self.candidate.to_dict(),
+            "status": self.status,
+            "reason": self.reason,
+            "dry_run": self.dry_run,
+            "write_result": _json_safe(self.write_result),
+        }
+
+
+@dataclass(slots=True)
+class MemoryPromotionResult:
+    """Dry-run promotion hook result."""
+
+    decisions: list[MemoryPromotionDecision] = field(default_factory=list)
+
+    @property
+    def approved_count(self) -> int:
+        return sum(1 for decision in self.decisions if decision.approved)
+
+    @property
+    def written_count(self) -> int:
+        return sum(1 for decision in self.decisions if decision.status == "written")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "decisions": [decision.to_dict() for decision in self.decisions],
+            "approved_count": self.approved_count,
+            "written_count": self.written_count,
+        }
+
+
+class MemoryPromotionJudge:
+    """Deterministic gate before any SP signal may become DR2 long-term memory."""
+
+    def __init__(self, *, min_confidence: float = 0.72):
+        self._min_confidence = min_confidence
+
+    def judge(self, candidate: MemoryCandidate) -> MemoryPromotionDecision:
+        content = candidate.content.strip()
+        if not content:
+            return self._reject(candidate, "Candidate content is empty.")
+
+        if candidate.confidence < self._min_confidence:
+            return self._reject(candidate, "Candidate confidence is below the promotion threshold.")
+
+        if candidate.kind in {"user_preference", "correction"} and not _is_stable_feedback(content):
+            return self._reject(candidate, "Human feedback is temporary; it lacks stable future/default/preference markers.")
+
+        if candidate.kind == "fact" and not candidate.source_entry_ids and not candidate.source_artifact_ids and not candidate.source_event_ids:
+            return self._reject(candidate, "Fact candidate has no SP provenance.")
+
+        if self._looks_like_large_report(content) and not self._has_explicit_long_term_signal(candidate):
+            return self._reject(candidate, "Large report-like content is not promoted by default.")
+
+        if candidate.kind == "correction" and candidate.scope == "global":
+            return self._reject(candidate, "Corrections require a narrower user, agent, or project scope.")
+
+        return MemoryPromotionDecision(
+            candidate=candidate,
+            status="approved",
+            reason="Candidate passed deterministic long-term memory promotion gates.",
+            dry_run=candidate.dry_run,
+        )
+
+    @staticmethod
+    def _reject(candidate: MemoryCandidate, reason: str) -> MemoryPromotionDecision:
+        return MemoryPromotionDecision(candidate=candidate, status="rejected", reason=reason, dry_run=True)
+
+    @staticmethod
+    def _looks_like_large_report(content: str) -> bool:
+        lowered = content.lower()
+        if len(content) > 2000:
+            return True
+        report_markers = ("# ", "executive summary", "final report", "研究报告", "调研报告", "报告正文")
+        return any(marker in lowered for marker in report_markers)
+
+    @staticmethod
+    def _has_explicit_long_term_signal(candidate: MemoryCandidate) -> bool:
+        if candidate.kind in {"user_preference", "correction"} and _is_stable_feedback(candidate.content):
+            return True
+        return bool(candidate.metadata.get("promotion_candidate") or candidate.metadata.get("explicit_long_term"))
+
+
+class MemoryPromotionHook:
+    """Default dry-run bridge from SP promotion candidates to DR2 memory APIs.
+
+    The hook never owns storage. Production wiring can inject a writer that uses
+    DeerFlow's existing MemoryUpdater/client APIs, but writes remain disabled
+    unless ``dry_run`` is explicitly set to False and each candidate is also
+    non-dry-run.
+    """
+
+    def __init__(
+        self,
+        *,
+        judge: MemoryPromotionJudge | None = None,
+        writer: Callable[[MemoryCandidate], Any] | None = None,
+        dry_run: bool = True,
+    ) -> None:
+        self._judge = judge or MemoryPromotionJudge()
+        self._writer = writer
+        self._dry_run = dry_run
+
+    def promote(self, candidates: Iterable[MemoryCandidate]) -> MemoryPromotionResult:
+        decisions: list[MemoryPromotionDecision] = []
+        for candidate in candidates:
+            decision = self._judge.judge(candidate)
+            if not decision.approved:
+                decisions.append(decision)
+                continue
+            if self._dry_run or candidate.dry_run or self._writer is None:
+                decisions.append(decision)
+                continue
+
+            write_result = self._writer(candidate)
+            decisions.append(
+                MemoryPromotionDecision(
+                    candidate=candidate,
+                    status="written",
+                    reason="Candidate was written through the injected DR2 memory writer.",
+                    dry_run=False,
+                    write_result=write_result,
+                )
+            )
+        return MemoryPromotionResult(decisions=decisions)
 
 
 class MemoryCandidateExtractor:

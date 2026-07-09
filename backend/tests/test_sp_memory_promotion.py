@@ -1,6 +1,6 @@
 """Tests for SP dry-run long-term memory promotion candidates."""
 
-from deerflow.sp.memory import MemoryCandidateExtractor, StackMemoryEntry, TaskMemoryStack
+from deerflow.sp.memory import MemoryCandidate, MemoryCandidateExtractor, MemoryPromotionHook, MemoryPromotionJudge, StackMemoryEntry, TaskMemoryStack
 
 
 def test_temporary_human_feedback_is_not_promoted():
@@ -10,6 +10,21 @@ def test_temporary_human_feedback_is_not_promoted():
     candidates = MemoryCandidateExtractor().extract(stack)
 
     assert candidates == []
+
+
+def test_temporary_feedback_candidate_is_rejected_by_judge():
+    candidate = MemoryCandidate(
+        candidate_id="spcand_temp",
+        kind="user_preference",
+        content="这次报告先写宏观部分",
+        source_entry_ids=["entry-1"],
+        confidence=0.95,
+    )
+
+    decision = MemoryPromotionJudge().judge(candidate)
+
+    assert decision.status == "rejected"
+    assert "temporary" in decision.reason
 
 
 def test_stable_feedback_becomes_dry_run_preference_candidate():
@@ -90,3 +105,49 @@ def test_all_candidates_default_to_dry_run():
 
     assert candidates
     assert all(candidate.dry_run for candidate in candidates)
+
+
+def test_promotion_hook_is_dry_run_by_default_and_does_not_write():
+    stack = TaskMemoryStack()
+    stack.append_feedback("以后默认用中文解释迁移风险")
+    candidate = MemoryCandidateExtractor().extract(stack)[0]
+    writes = []
+
+    result = MemoryPromotionHook(writer=writes.append).promote([candidate])
+
+    assert result.approved_count == 1
+    assert result.written_count == 0
+    assert writes == []
+    assert result.decisions[0].dry_run is True
+
+
+def test_promotion_hook_requires_explicit_non_dry_run_to_write():
+    candidate = MemoryCandidate(
+        candidate_id="spcand_write",
+        kind="user_preference",
+        content="以后默认用中文解释迁移风险",
+        source_entry_ids=["entry-1"],
+        confidence=0.96,
+        dry_run=False,
+    )
+    writes = []
+
+    result = MemoryPromotionHook(writer=writes.append, dry_run=False).promote([candidate])
+
+    assert result.written_count == 1
+    assert writes == [candidate]
+
+
+def test_report_like_content_is_rejected_without_explicit_long_term_signal():
+    candidate = MemoryCandidate(
+        candidate_id="spcand_report",
+        kind="fact",
+        content="# 调研报告\n\n这是一整篇报告正文，不应该默认写入长期记忆。",
+        source_artifact_ids=["report-v1"],
+        confidence=0.93,
+    )
+
+    decision = MemoryPromotionJudge().judge(candidate)
+
+    assert decision.status == "rejected"
+    assert "report-like" in decision.reason
