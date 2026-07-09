@@ -193,6 +193,21 @@ class SPArtifactAdapter:
         refs["_history"] = history[-50:]
         return refs
 
+    def bind_feedback(self, artifact_refs: dict[str, Any], feedback_entry_id: str, *, artifact_ids: list[str] | None = None) -> dict[str, Any]:
+        """Bind a human feedback entry id to matching artifact refs."""
+        target_ids = set(artifact_ids or [])
+        refs = dict(artifact_refs)
+        for key, value in list(refs.items()):
+            if key == "_history" or not isinstance(value, dict):
+                continue
+            if target_ids and value.get("artifact_id") not in target_ids:
+                continue
+            refs[key] = _with_feedback_id(value, feedback_entry_id)
+        history = refs.get("_history")
+        if isinstance(history, list):
+            refs["_history"] = [_with_feedback_id(item, feedback_entry_id) if isinstance(item, dict) and (not target_ids or item.get("artifact_id") in target_ids) else item for item in history]
+        return refs
+
 
 def _stage_for_legacy_field(field_name: str) -> str | None:
     return {
@@ -213,3 +228,12 @@ def _merge_state_updates(existing: dict[str, Any], new: dict[str, Any]) -> dict[
     if "sp_current_report_version" in new:
         merged["sp_current_report_version"] = new["sp_current_report_version"]
     return merged
+
+
+def _with_feedback_id(ref: dict[str, Any], feedback_entry_id: str) -> dict[str, Any]:
+    updated = dict(ref)
+    feedback_ids = [str(item) for item in updated.get("feedback_entry_ids", [])]
+    if feedback_entry_id not in feedback_ids:
+        feedback_ids.append(feedback_entry_id)
+    updated["feedback_entry_ids"] = feedback_ids
+    return updated

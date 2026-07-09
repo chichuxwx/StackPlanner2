@@ -95,6 +95,18 @@ def test_metadata_ref_is_json_safe_and_excludes_workspace_path_from_thread_ref()
     assert ref["metadata"] == {"set": ["a", "b"]}
 
 
+def test_bind_feedback_updates_current_ref_and_history():
+    refs = {
+        "report": {"artifact_id": "report-1", "type": "report", "feedback_entry_ids": []},
+        "_history": [{"artifact_id": "report-1", "type": "report", "feedback_entry_ids": []}],
+    }
+
+    updated = SPArtifactAdapter().bind_feedback(refs, "feedback-1", artifact_ids=["report-1"])
+
+    assert updated["report"]["feedback_entry_ids"] == ["feedback-1"]
+    assert updated["_history"][0]["feedback_entry_ids"] == ["feedback-1"]
+
+
 def test_write_text_artifact_requires_dr2_thread_context_when_no_outputs_path():
     with pytest.raises(ValueError, match="thread_data.outputs_path or thread_id"):
         SPArtifactAdapter().write_text_artifact("body", artifact_type="report", state={})

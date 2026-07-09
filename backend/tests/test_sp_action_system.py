@@ -4,6 +4,7 @@ import pytest
 
 from deerflow.sp.actions import ActionType, ActionValidationError, SPAction, build_default_action_router
 from deerflow.sp.central import CENTRAL_AGENT_ACTION_PROMPT
+from deerflow.sp.hitl import record_human_feedback
 from deerflow.sp.memory import TaskMemoryStack
 from deerflow.sp.subagents import SPSubagentResult, SPSubagentStatus, SPSubagentTask
 
@@ -145,6 +146,59 @@ def test_finish_handler_rejects_pending_human_and_accepts_final_ref():
     assert accepted.next_step == "finish"
     assert accepted.state_update["sp_current_stage"] == "finished"
     assert TaskMemoryStack.from_dict(accepted.state_update["sp_task_memory"]).entries[-1].action == "finish"
+
+
+def test_ask_human_interrupts_and_records_pending_interaction():
+    state = {"sp_current_artifact_refs": {"outline": {"artifact_id": "outline-1", "type": "outline"}}}
+    action = _action(
+        ActionType.ASK_HUMAN,
+        action_id="act-human",
+        task="Please confirm the outline",
+        metadata={"interaction_type": "outline_confirmation"},
+        stage="planning",
+    )
+
+    result = build_default_action_router().execute(action, state=state, thread_id="thread-1", run_id="run-1")
+
+    assert result.next_step == "interrupt"
+    pending = result.state_update["sp_pending_human_interaction"]
+    assert pending["status"] == "pending"
+    assert pending["interaction_type"] == "outline_confirmation"
+    assert pending["artifact_refs"]["outline"]["artifact_id"] == "outline-1"
+    restored = TaskMemoryStack.from_dict(result.state_update["sp_task_memory"])
+    assert restored.entries[-1].action == "ask_human"
+    assert restored.entries[-1].content == "Please confirm the outline"
+    assert any(event["event_type"] == "sp.human.requested" for event in result.run_events)
+
+
+def test_record_human_feedback_clears_pending_and_pins_feedback():
+    stack = TaskMemoryStack()
+    state = {
+        "sp_task_memory": stack.to_dict(),
+        "sp_current_stage": "planning",
+        "sp_pending_human_interaction": {
+            "interaction_id": "hitl-1",
+            "interaction_type": "outline_confirmation",
+            "artifact_refs": {"outline": {"artifact_id": "outline-1", "type": "outline"}},
+            "status": "pending",
+        },
+        "sp_current_artifact_refs": {
+            "outline": {"artifact_id": "outline-1", "type": "outline", "feedback_entry_ids": []},
+            "_history": [{"artifact_id": "outline-1", "type": "outline", "feedback_entry_ids": []}],
+        },
+    }
+
+    result = record_human_feedback(state, "以后大纲先写结论再写证据", thread_id="thread-1", run_id="run-1")
+
+    assert result.state_update["sp_pending_human_interaction"] is None
+    restored = TaskMemoryStack.from_dict(result.state_update["sp_task_memory"])
+    feedback = restored.entries[-1]
+    assert feedback.action == "feedback"
+    assert feedback.priority == "critical"
+    assert feedback.status == "pinned"
+    assert feedback.metadata["interaction_id"] == "hitl-1"
+    assert result.state_update["sp_current_artifact_refs"]["outline"]["feedback_entry_ids"] == [feedback.id]
+    assert result.state_update["sp_current_artifact_refs"]["_history"][0]["feedback_entry_ids"] == [feedback.id]
 
 
 def test_router_rejects_unregistered_subagent_actions_until_phase_3():
