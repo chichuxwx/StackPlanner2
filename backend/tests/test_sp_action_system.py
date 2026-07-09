@@ -37,6 +37,20 @@ def test_delegate_schema_requires_target_agent_and_task():
         SPAction.create(ActionType.DELEGATE, reason="Need research", target_agent="researcher")
 
 
+def test_recall_memory_schema_requires_query_or_task():
+    with pytest.raises(ActionValidationError, match="memory_query"):
+        SPAction.create(ActionType.RECALL_MEMORY, reason="Need prior context")
+
+    action = SPAction.create(
+        ActionType.RECALL_MEMORY,
+        action_id="act-recall-schema",
+        reason="Need prior context",
+        metadata={"memory_query": "migration preferences"},
+    )
+
+    assert action.action_type == ActionType.RECALL_MEMORY
+
+
 def test_router_executes_think_and_records_events_and_thread_state():
     router = build_default_action_router()
     action = _action(ActionType.THINK, action_id="act-think", idempotency_key="idem-think", task="Inspect state", stage="planning")
@@ -201,6 +215,20 @@ def test_record_human_feedback_clears_pending_and_pins_feedback():
     assert result.state_update["sp_current_artifact_refs"]["_history"][0]["feedback_entry_ids"] == [feedback.id]
 
 
+def test_recall_memory_requires_memory_recaller_executor():
+    action = _action(
+        ActionType.RECALL_MEMORY,
+        action_id="act-recall-no-executor",
+        metadata={"memory_query": "migration preferences"},
+    )
+
+    result = build_default_action_router().execute(action, state={})
+
+    assert result.next_step == "error_recoverable"
+    assert "memory_recaller subagent executor" in result.error
+    assert any(event["event_type"] == "sp.handler.failed" for event in result.run_events)
+
+
 def test_router_rejects_unregistered_subagent_actions_until_phase_3():
     action = _action(ActionType.DELEGATE, action_id="act-delegate", target_agent="researcher", task="Research")
 
@@ -286,6 +314,64 @@ def test_delegate_handler_records_failure_as_recoverable_error():
     assert any(event["event_type"] == "sp.delegate.failed" for event in result.run_events)
 
 
+def test_recall_memory_handler_calls_memory_recaller_and_records_dry_run_result():
+    executor = FakeSubagentExecutor(
+        SPSubagentResult(
+            status=SPSubagentStatus.COMPLETED,
+            result='{"summary":"Use phased commits and tests.","items":[{"content":"User wants a unit test after every migration unit.","source":"user_memory","score":0.94,"scope":"project","memory_id":"mem-1"}]}',
+            task_id="mem-task-1",
+        )
+    )
+    action = _action(
+        ActionType.RECALL_MEMORY,
+        action_id="act-recall-ok",
+        metadata={"memory_query": "StackPlanner migration preferences"},
+        stage="planning",
+    )
+
+    result = build_default_action_router(memory_recall_executor=executor).execute(action, state={}, thread_id="thread-1", run_id="run-1")
+
+    assert result.next_step == "continue"
+    assert executor.tasks[0].subagent_type == "memory_recaller"
+    assert "Do not write, update, promote, or mutate long-term memory." in executor.tasks[0].task
+    assert executor.tasks[0].metadata["dry_run_promotion"] is True
+    restored = TaskMemoryStack.from_dict(result.state_update["sp_task_memory"])
+    assert [entry.action for entry in restored.entries[-2:]] == ["recall_memory", "recall_memory"]
+    recall_entry = restored.entries[-1]
+    assert recall_entry.actor == "memory_recaller"
+    assert recall_entry.result_ref == "mem-task-1"
+    assert recall_entry.metadata["dry_run_promotion"] is True
+    assert recall_entry.metadata["recall"]["dry_run_promotion"] is True
+    assert recall_entry.metadata["recall"]["items"][0]["memory_id"] == "mem-1"
+    assert "User wants a unit test" in recall_entry.content
+    assert any(event["event_type"] == "sp.memory.recall.completed" for event in result.run_events)
+
+
+def test_recall_memory_handler_records_failure_as_recoverable_error():
+    executor = FakeSubagentExecutor(
+        SPSubagentResult(
+            status=SPSubagentStatus.FAILED,
+            error="memory unavailable",
+            task_id="mem-task-failed",
+        )
+    )
+    action = _action(
+        ActionType.RECALL_MEMORY,
+        action_id="act-recall-fail",
+        metadata={"memory_query": "StackPlanner migration preferences"},
+    )
+
+    result = build_default_action_router(memory_recall_executor=executor).execute(action, state={})
+
+    assert result.next_step == "error_recoverable"
+    assert result.error == "memory unavailable"
+    restored = TaskMemoryStack.from_dict(result.state_update["sp_task_memory"])
+    assert [entry.action for entry in restored.entries[-2:]] == ["recall_memory", "error"]
+    assert restored.entries[-1].actor == "memory_recaller"
+    assert restored.entries[-1].result_ref == "mem-task-failed"
+    assert any(event["event_type"] == "sp.memory.recall.failed" for event in result.run_events)
+
+
 def test_router_stops_when_loop_limit_is_exceeded():
     action = _action(ActionType.THINK, action_id="act-loop", task="keep thinking")
 
@@ -306,3 +392,4 @@ def test_central_prompt_enforces_action_json_and_no_direct_tools():
     assert "search" in prompt
     assert "bash" in prompt
     assert "FINISH requires no pending human interaction" in prompt
+    assert "handler routes to memory_recaller" in prompt

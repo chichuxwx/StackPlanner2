@@ -4,7 +4,7 @@ from deerflow.sp.actions import ActionRouter, ActionType, HandlerResult, SPActio
 from deerflow.sp.artifacts import SPArtifactAdapter, SPArtifactMetadata, SPArtifactWriteResult
 from deerflow.sp.central import CENTRAL_AGENT_ACTION_PROMPT
 from deerflow.sp.hitl import SPHumanFeedbackResult, SPHumanInteraction, record_human_feedback
-from deerflow.sp.memory import StackMemoryEntry, TaskMemoryStack
+from deerflow.sp.memory import MemoryRecallItem, MemoryRecallResult, StackMemoryEntry, TaskMemoryStack, normalize_memory_recall_result
 from deerflow.sp.memory.promotion import MemoryCandidate, MemoryCandidateExtractor
 from deerflow.sp.middlewares import TaskMemoryMiddleware
 from deerflow.sp.prompt import PromptContextBuilder
@@ -17,6 +17,8 @@ __all__ = [
     "HandlerResult",
     "MemoryCandidate",
     "MemoryCandidateExtractor",
+    "MemoryRecallItem",
+    "MemoryRecallResult",
     "PromptContextBuilder",
     "SPArtifactAdapter",
     "SPArtifactMetadata",
@@ -32,5 +34,6 @@ __all__ = [
     "TaskMemoryMiddleware",
     "TaskMemoryStack",
     "build_default_action_router",
+    "normalize_memory_recall_result",
     "record_human_feedback",
 ]

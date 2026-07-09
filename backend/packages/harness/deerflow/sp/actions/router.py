@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from deerflow.sp.actions.events import make_sp_event
-from deerflow.sp.actions.handlers import AskHumanHandler, BacktrackHandler, DelegateHandler, FinishHandler, HandlerContext, ReflectHandler, ReplanHandler, SummarizeHandler, ThinkHandler
+from deerflow.sp.actions.handlers import AskHumanHandler, BacktrackHandler, DelegateHandler, FinishHandler, HandlerContext, MemoryRecallHandler, ReflectHandler, ReplanHandler, SummarizeHandler, ThinkHandler
 from deerflow.sp.actions.handlers.base import BaseActionHandler
 from deerflow.sp.actions.schema import ActionType, ActionValidationError, HandlerResult, SPAction
 from deerflow.sp.artifacts import SPArtifactAdapter
@@ -153,6 +153,7 @@ class ActionRouter:
 def build_default_action_router(
     *,
     delegate_executor: SPSubagentExecutorProtocol | None = None,
+    memory_recall_executor: SPSubagentExecutorProtocol | None = None,
     artifact_adapter: SPArtifactAdapter | None = None,
 ) -> ActionRouter:
     handlers: dict[ActionType, BaseActionHandler] = {
@@ -162,6 +163,7 @@ def build_default_action_router(
         ActionType.REPLAN: ReplanHandler(),
         ActionType.SUMMARIZE: SummarizeHandler(),
         ActionType.ASK_HUMAN: AskHumanHandler(),
+        ActionType.RECALL_MEMORY: MemoryRecallHandler(executor=memory_recall_executor),
         ActionType.FINISH: FinishHandler(),
     }
     if delegate_executor is not None:
