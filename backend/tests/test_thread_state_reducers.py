@@ -19,8 +19,8 @@ from deerflow.agents.thread_state import (
     merge_delegations,
     merge_goal,
     merge_sandbox,
-    merge_sp_task_memory,
     merge_skill_context,
+    merge_sp_task_memory,
     merge_todos,
     merge_viewed_images,
 )

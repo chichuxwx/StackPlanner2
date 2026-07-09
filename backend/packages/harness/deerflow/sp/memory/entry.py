@@ -7,16 +7,15 @@ DeerFlow's ThreadState/checkpointer remains the persistence boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
-
 
 EntryDict = dict[str, Any]
 
 
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _json_safe(value: Any) -> Any:
@@ -97,7 +96,7 @@ class StackMemoryEntry:
         self.metadata = _json_safe(self.metadata) or {}
 
     @classmethod
-    def from_dict(cls, data: EntryDict) -> "StackMemoryEntry":
+    def from_dict(cls, data: EntryDict) -> StackMemoryEntry:
         """Restore a new-format entry or normalize a legacy SP stack entry."""
         if "timestamp" in data or "agent_type" in data or "result" in data:
             return cls.from_legacy_dict(data)
@@ -121,7 +120,7 @@ class StackMemoryEntry:
         )
 
     @classmethod
-    def from_legacy_dict(cls, data: EntryDict, *, thread_id: str | None = None, run_id: str | None = None) -> "StackMemoryEntry":
+    def from_legacy_dict(cls, data: EntryDict, *, thread_id: str | None = None, run_id: str | None = None) -> StackMemoryEntry:
         """Convert StackPlanner's old MemoryStackEntry dict into SP-on-DR2 shape."""
         legacy_action = str(data.get("action") or "")
         legacy_agent_type = data.get("agent_type")
@@ -162,4 +161,3 @@ class StackMemoryEntry:
             "promotion_candidate": self.promotion_candidate,
             "metadata": _json_safe(self.metadata),
         }
-

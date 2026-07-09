@@ -8,7 +8,6 @@ from typing import Any
 
 from deerflow.sp.memory.entry import StackMemoryEntry, utc_now_iso
 
-
 SP_TASK_MEMORY_VERSION = 1
 
 
@@ -126,7 +125,7 @@ class TaskMemoryStack:
         }
 
     @classmethod
-    def from_dict(cls, data: Any, *, thread_id: str | None = None, run_id: str | None = None, max_size: int = 50) -> "TaskMemoryStack":
+    def from_dict(cls, data: Any, *, thread_id: str | None = None, run_id: str | None = None, max_size: int = 50) -> TaskMemoryStack:
         if not data:
             return cls(max_size=max_size)
         if isinstance(data, str):
@@ -166,7 +165,7 @@ class TaskMemoryStack:
         thread_id: str | None = None,
         run_id: str | None = None,
         max_size: int = 50,
-    ) -> "TaskMemoryStack":
+    ) -> TaskMemoryStack:
         if isinstance(data, str):
             try:
                 data = json.loads(data)
@@ -175,11 +174,7 @@ class TaskMemoryStack:
         if not isinstance(data, list):
             return cls(max_size=max_size)
 
-        entries = [
-            StackMemoryEntry.from_legacy_dict(entry, thread_id=thread_id, run_id=run_id)
-            for entry in data
-            if isinstance(entry, dict)
-        ]
+        entries = [StackMemoryEntry.from_legacy_dict(entry, thread_id=thread_id, run_id=run_id) for entry in data if isinstance(entry, dict)]
         return cls(entries, max_size=max_size)
 
     def size(self) -> int:
