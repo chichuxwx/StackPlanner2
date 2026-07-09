@@ -100,3 +100,36 @@ def test_serialize_round_trip_uses_thread_state_shape():
     assert restored.to_dict()["version"] == 1
     assert restored.entries[0].id == "spmem_custom"
     assert restored.entries[0].content == "Keep it structured"
+
+
+def test_short_term_stack_supports_designed_sp_control_flow():
+    stack = TaskMemoryStack()
+
+    think = stack.append_think("Plan the migration slice", stage="planning")
+    recall = stack.append_memory_recall("Recall prior migration preferences", stage="planning")
+    delegate = stack.append_delegate("Ask researcher to inspect ThreadState", stage="research")
+    observe = stack.append_observe("ThreadState is the persistence boundary", actor="researcher", stage="research")
+    feedback = stack.append_feedback("Keep user feedback above summaries", stage="revision")
+    summary = stack.condense([think.id, recall.id, observe.id], "Planning and research summarized")
+    backtrack = stack.mark_backtracked([delegate.id], "Delegation target was too broad", stage="planning")
+    replan = stack.append_replan("Delegate narrower implementation tasks", stage="planning")
+    finish = stack.append_finish("Short-term memory slice is locally verified")
+
+    assert [entry.action for entry in stack.entries] == [
+        "think",
+        "recall_memory",
+        "delegate",
+        "observe",
+        "feedback",
+        "summarize",
+        "backtrack",
+        "replan",
+        "finish",
+    ]
+    assert feedback in stack.get_pinned_entries()
+    assert feedback.status == "pinned"
+    assert summary.parent_ids == [think.id, recall.id, observe.id]
+    assert delegate.status == "pruned"
+    assert backtrack.failure_note == "Delegation target was too broad"
+    assert stack.get_checkpoint("planning") == replan
+    assert finish.stage == "finished"
