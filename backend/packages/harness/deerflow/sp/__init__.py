@@ -7,6 +7,7 @@ from deerflow.sp.memory import StackMemoryEntry, TaskMemoryStack
 from deerflow.sp.memory.promotion import MemoryCandidate, MemoryCandidateExtractor
 from deerflow.sp.middlewares import TaskMemoryMiddleware
 from deerflow.sp.prompt import PromptContextBuilder
+from deerflow.sp.subagents import SPSubagentExecutorProtocol, SPSubagentResult, SPSubagentStatus, SPSubagentTask
 
 __all__ = [
     "ActionRouter",
@@ -20,6 +21,10 @@ __all__ = [
     "SPArtifactMetadata",
     "SPArtifactWriteResult",
     "SPAction",
+    "SPSubagentExecutorProtocol",
+    "SPSubagentResult",
+    "SPSubagentStatus",
+    "SPSubagentTask",
     "StackMemoryEntry",
     "TaskMemoryMiddleware",
     "TaskMemoryStack",

@@ -83,6 +83,7 @@ class SPArtifactAdapter:
         feedback_entry_ids: list[str] | None = None,
         version: int | None = None,
         filename_hint: str | None = None,
+        summary: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> SPArtifactWriteResult:
         """Write large SP content under DR2 outputs and return ThreadState refs."""
@@ -111,7 +112,7 @@ class SPArtifactAdapter:
             stage=stage,
             source_entry_id=source_entry_id,
             parent_artifact_ids=parent_artifact_ids or [],
-            summary=_summarize(payload),
+            summary=_summarize(summary or payload),
             workspace_path=str(file_path),
             virtual_path=virtual_path,
             artifact_url=_artifact_url(thread_id, virtual_path),

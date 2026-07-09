@@ -5,6 +5,7 @@ import pytest
 from deerflow.sp.actions import ActionType, ActionValidationError, SPAction, build_default_action_router
 from deerflow.sp.central import CENTRAL_AGENT_ACTION_PROMPT
 from deerflow.sp.memory import TaskMemoryStack
+from deerflow.sp.subagents import SPSubagentResult, SPSubagentStatus, SPSubagentTask
 
 
 def _action(action_type: ActionType | str, **kwargs):
@@ -153,6 +154,82 @@ def test_router_rejects_unregistered_subagent_actions_until_phase_3():
 
     assert result.next_step == "error_recoverable"
     assert "No handler registered" in result.error
+
+
+class FakeSubagentExecutor:
+    def __init__(self, result: SPSubagentResult):
+        self.result = result
+        self.tasks: list[SPSubagentTask] = []
+
+    def execute(self, task: SPSubagentTask) -> SPSubagentResult:
+        self.tasks.append(task)
+        return self.result
+
+
+def _thread_state_with_outputs(tmp_path):
+    return {
+        "thread_data": {
+            "outputs_path": str(tmp_path / "threads" / "thread-1" / "user-data" / "outputs"),
+        }
+    }
+
+
+def test_delegate_handler_calls_executor_and_externalizes_large_result(tmp_path):
+    executor = FakeSubagentExecutor(
+        SPSubagentResult(
+            status=SPSubagentStatus.COMPLETED,
+            result="Report artifact created",
+            task_id="task-1",
+            artifact_content="# Draft report\n\nLarge report body",
+            artifact_type="report_revision",
+        )
+    )
+    state = _thread_state_with_outputs(tmp_path)
+    action = _action(
+        ActionType.DELEGATE,
+        action_id="act-delegate-ok",
+        target_agent="reporter",
+        task="Draft the report",
+        input_refs=["artifact://outline"],
+        expected_output="report artifact",
+        stage="reporting",
+    )
+
+    result = build_default_action_router(delegate_executor=executor).execute(action, state=state, thread_id="thread-1", run_id="run-1")
+
+    assert result.next_step == "continue"
+    assert executor.tasks[0].subagent_type == "reporter"
+    assert executor.tasks[0].input_refs == ["artifact://outline"]
+    assert "task_memory" in executor.tasks[0].context_refs
+    restored = TaskMemoryStack.from_dict(result.state_update["sp_task_memory"])
+    assert [entry.action for entry in restored.entries[-2:]] == ["delegate", "observe"]
+    assert restored.entries[-1].actor == "reporter"
+    assert result.state_update["sp_active_delegate_id"] is None
+    assert result.state_update["artifacts"][0].startswith("/mnt/user-data/outputs/sp/report_revision/")
+    report_ref = result.state_update["sp_current_artifact_refs"]["report_revision"]
+    assert report_ref["artifact_id"] == restored.entries[-1].result_ref
+    assert "Large report body" not in str(report_ref)
+    assert any(event["event_type"] == "sp.delegate.completed" for event in result.run_events)
+
+
+def test_delegate_handler_records_failure_as_recoverable_error():
+    executor = FakeSubagentExecutor(
+        SPSubagentResult(
+            status=SPSubagentStatus.FAILED,
+            error="research failed",
+            task_id="task-failed",
+        )
+    )
+    action = _action(ActionType.DELEGATE, action_id="act-delegate-fail", target_agent="researcher", task="Research")
+
+    result = build_default_action_router(delegate_executor=executor).execute(action, state={})
+
+    assert result.next_step == "error_recoverable"
+    assert result.error == "research failed"
+    restored = TaskMemoryStack.from_dict(result.state_update["sp_task_memory"])
+    assert [entry.action for entry in restored.entries[-2:]] == ["delegate", "error"]
+    assert restored.entries[-1].result_ref == "task-failed"
+    assert any(event["event_type"] == "sp.delegate.failed" for event in result.run_events)
 
 
 def test_router_stops_when_loop_limit_is_exceeded():

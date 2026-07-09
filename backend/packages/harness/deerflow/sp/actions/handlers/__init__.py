@@ -2,6 +2,7 @@
 
 from deerflow.sp.actions.handlers.backtrack import BacktrackHandler
 from deerflow.sp.actions.handlers.base import BaseActionHandler, HandlerContext
+from deerflow.sp.actions.handlers.delegate import DelegateHandler
 from deerflow.sp.actions.handlers.finish import FinishHandler
 from deerflow.sp.actions.handlers.reflect import ReflectHandler
 from deerflow.sp.actions.handlers.replan import ReplanHandler
@@ -11,6 +12,7 @@ from deerflow.sp.actions.handlers.think import ThinkHandler
 __all__ = [
     "BacktrackHandler",
     "BaseActionHandler",
+    "DelegateHandler",
     "FinishHandler",
     "HandlerContext",
     "ReflectHandler",

@@ -6,10 +6,12 @@ from collections.abc import Mapping
 from typing import Any
 
 from deerflow.sp.actions.events import make_sp_event
-from deerflow.sp.actions.handlers import BacktrackHandler, FinishHandler, HandlerContext, ReflectHandler, ReplanHandler, SummarizeHandler, ThinkHandler
+from deerflow.sp.actions.handlers import BacktrackHandler, DelegateHandler, FinishHandler, HandlerContext, ReflectHandler, ReplanHandler, SummarizeHandler, ThinkHandler
 from deerflow.sp.actions.handlers.base import BaseActionHandler
 from deerflow.sp.actions.schema import ActionType, ActionValidationError, HandlerResult, SPAction
+from deerflow.sp.artifacts import SPArtifactAdapter
 from deerflow.sp.memory import TaskMemoryStack
+from deerflow.sp.subagents import SPSubagentExecutorProtocol
 
 DEFAULT_MAX_LOOP_ITERATIONS = 20
 
@@ -148,14 +150,19 @@ class ActionRouter:
         return state_update
 
 
-def build_default_action_router() -> ActionRouter:
-    return ActionRouter(
-        {
-            ActionType.THINK: ThinkHandler(),
-            ActionType.REFLECT: ReflectHandler(),
-            ActionType.BACKTRACK: BacktrackHandler(),
-            ActionType.REPLAN: ReplanHandler(),
-            ActionType.SUMMARIZE: SummarizeHandler(),
-            ActionType.FINISH: FinishHandler(),
-        }
-    )
+def build_default_action_router(
+    *,
+    delegate_executor: SPSubagentExecutorProtocol | None = None,
+    artifact_adapter: SPArtifactAdapter | None = None,
+) -> ActionRouter:
+    handlers: dict[ActionType, BaseActionHandler] = {
+        ActionType.THINK: ThinkHandler(),
+        ActionType.REFLECT: ReflectHandler(),
+        ActionType.BACKTRACK: BacktrackHandler(),
+        ActionType.REPLAN: ReplanHandler(),
+        ActionType.SUMMARIZE: SummarizeHandler(),
+        ActionType.FINISH: FinishHandler(),
+    }
+    if delegate_executor is not None:
+        handlers[ActionType.DELEGATE] = DelegateHandler(executor=delegate_executor, artifact_adapter=artifact_adapter)
+    return ActionRouter(handlers)
