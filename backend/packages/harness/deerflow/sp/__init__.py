@@ -4,6 +4,7 @@ from deerflow.sp.actions import ActionRouter, ActionType, HandlerResult, SPActio
 from deerflow.sp.artifacts import SPArtifactAdapter, SPArtifactMetadata, SPArtifactWriteResult
 from deerflow.sp.central import CENTRAL_AGENT_ACTION_PROMPT
 from deerflow.sp.hitl import SPHumanFeedbackResult, SPHumanInteraction, record_human_feedback
+from deerflow.sp.loop import ActionLoop, ActionLoopResult, CentralActionDecider, CentralDecisionRequest
 from deerflow.sp.memory import MemoryRecallItem, MemoryRecallResult, StackMemoryEntry, TaskMemoryStack, normalize_memory_recall_result
 from deerflow.sp.memory.promotion import MemoryCandidate, MemoryCandidateExtractor
 from deerflow.sp.middlewares import TaskMemoryMiddleware
@@ -13,7 +14,11 @@ from deerflow.sp.subagents import SPSubagentExecutorProtocol, SPSubagentResult, 
 __all__ = [
     "ActionRouter",
     "ActionType",
+    "ActionLoop",
+    "ActionLoopResult",
     "CENTRAL_AGENT_ACTION_PROMPT",
+    "CentralActionDecider",
+    "CentralDecisionRequest",
     "HandlerResult",
     "MemoryCandidate",
     "MemoryCandidateExtractor",
