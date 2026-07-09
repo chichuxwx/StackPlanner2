@@ -1,0 +1,177 @@
+"""Tests for SP Action schema, router, and state-only handlers."""
+
+import pytest
+
+from deerflow.sp.actions import ActionType, ActionValidationError, SPAction, build_default_action_router
+from deerflow.sp.central import CENTRAL_AGENT_ACTION_PROMPT
+from deerflow.sp.memory import TaskMemoryStack
+
+
+def _action(action_type: ActionType | str, **kwargs):
+    return SPAction.create(action_type, reason=kwargs.pop("reason", "unit-test reason"), **kwargs)
+
+
+def test_action_schema_requires_action_id_and_normalizes_type():
+    with pytest.raises(ActionValidationError, match="action_id"):
+        SPAction.from_dict({"action_type": "think", "reason": "missing id"})
+
+    action = SPAction.from_dict(
+        {
+            "action_id": "act-1",
+            "action_type": "think",
+            "reason": "Need a plan",
+            "task": "Plan next step",
+        }
+    )
+
+    assert action.action_type == ActionType.THINK
+    assert action.idempotency_key.startswith("spidem_")
+
+
+def test_delegate_schema_requires_target_agent_and_task():
+    with pytest.raises(ActionValidationError, match="target_agent"):
+        SPAction.create(ActionType.DELEGATE, reason="Need research", task="Research")
+    with pytest.raises(ActionValidationError, match="task"):
+        SPAction.create(ActionType.DELEGATE, reason="Need research", target_agent="researcher")
+
+
+def test_router_executes_think_and_records_events_and_thread_state():
+    router = build_default_action_router()
+    action = _action(ActionType.THINK, action_id="act-think", idempotency_key="idem-think", task="Inspect state", stage="planning")
+
+    result = router.execute(action, state={}, thread_id="thread-1", run_id="run-1")
+
+    assert result.next_step == "continue"
+    assert result.state_update["sp_current_stage"] == "planning"
+    assert result.state_update["sp_last_action_id"] == "act-think"
+    assert result.state_update["sp_last_idempotency_key"] == "idem-think"
+    assert result.state_update["sp_loop_iteration"] == 1
+    stack = TaskMemoryStack.from_dict(result.state_update["sp_task_memory"])
+    assert stack.entries[-1].action == "think"
+    assert stack.entries[-1].thread_id == "thread-1"
+    assert [event["event_type"] for event in result.run_events[:2]] == ["sp.action.created", "sp.handler.started"]
+    assert result.run_events[-1]["event_type"] == "sp.handler.completed"
+
+
+def test_router_skips_duplicate_idempotency_key():
+    router = build_default_action_router()
+    state = {
+        "sp_last_idempotency_key": "idem-1",
+        "sp_last_handler_result": {"next_step": "finish"},
+    }
+    action = _action(ActionType.THINK, action_id="act-repeat", idempotency_key="idem-1", task="Repeat")
+
+    result = router.execute(action, state=state)
+
+    assert result.next_step == "finish"
+    assert result.state_update == {}
+    assert result.run_events[0]["event_type"] == "sp.action.duplicate_skipped"
+
+
+def test_summarize_handler_condenses_sources_without_touching_pinned_feedback():
+    stack = TaskMemoryStack()
+    first = stack.append_think("old plan")
+    feedback = stack.append_feedback("Pinned feedback")
+    second = stack.append_observe("research", actor="researcher")
+    state = {"sp_task_memory": stack.to_dict()}
+    action = _action(
+        ActionType.SUMMARIZE,
+        action_id="act-summary",
+        task="Summary of useful parts",
+        metadata={"source_entry_ids": [first.id, feedback.id, second.id]},
+    )
+
+    result = build_default_action_router().execute(action, state=state)
+    restored = TaskMemoryStack.from_dict(result.state_update["sp_task_memory"])
+
+    by_id = {entry.id: entry for entry in restored.entries}
+    assert by_id[first.id].status == "condensed"
+    assert by_id[feedback.id].status == "pinned"
+    assert by_id[second.id].status == "condensed"
+    assert restored.entries[-1].action == "summarize"
+
+
+def test_backtrack_marks_entries_after_target_and_preserves_artifact_history():
+    stack = TaskMemoryStack()
+    target = stack.append_think("safe checkpoint", stage="planning")
+    doomed = stack.append_delegate("too broad delegation", stage="research")
+    state = {
+        "sp_task_memory": stack.to_dict(),
+        "sp_active_delegate_id": "delegate-1",
+        "sp_current_artifact_refs": {
+            "report": {"artifact_id": "new", "type": "report", "version": 2},
+            "_history": [
+                {"artifact_id": "old", "type": "report", "version": 1},
+                {"artifact_id": "new", "type": "report", "version": 2},
+            ],
+        },
+    }
+    action = _action(
+        ActionType.BACKTRACK,
+        action_id="act-backtrack",
+        metadata={
+            "backtrack_target_type": "entry",
+            "backtrack_target_id": target.id,
+            "rollback_scope": "full_working_state",
+            "reason": "delegation went wide",
+        },
+        stage="planning",
+    )
+
+    result = build_default_action_router().execute(action, state=state)
+    restored = TaskMemoryStack.from_dict(result.state_update["sp_task_memory"])
+    by_id = {entry.id: entry for entry in restored.entries}
+
+    assert by_id[doomed.id].status == "pruned"
+    assert result.state_update["sp_active_delegate_id"] is None
+    assert result.state_update["sp_current_artifact_refs"]["report"]["artifact_id"] == "new"
+    assert restored.entries[-1].action == "backtrack"
+    assert any(event["event_type"] == "sp.memory.backtracked" for event in result.run_events)
+
+
+def test_finish_handler_rejects_pending_human_and_accepts_final_ref():
+    router = build_default_action_router()
+    action = _action(ActionType.FINISH, action_id="act-finish", task="Done")
+
+    rejected = router.execute(action, state={"sp_pending_human_interaction": {"status": "pending"}})
+    assert rejected.next_step == "error_recoverable"
+    assert "pending" in rejected.error
+
+    accepted = router.execute(
+        _action(ActionType.FINISH, action_id="act-finish-2", task="Done"),
+        state={"sp_current_artifact_refs": {"report": {"artifact_id": "report-1"}}},
+    )
+    assert accepted.next_step == "finish"
+    assert accepted.state_update["sp_current_stage"] == "finished"
+    assert TaskMemoryStack.from_dict(accepted.state_update["sp_task_memory"]).entries[-1].action == "finish"
+
+
+def test_router_rejects_unregistered_subagent_actions_until_phase_3():
+    action = _action(ActionType.DELEGATE, action_id="act-delegate", target_agent="researcher", task="Research")
+
+    result = build_default_action_router().execute(action, state={})
+
+    assert result.next_step == "error_recoverable"
+    assert "No handler registered" in result.error
+
+
+def test_router_stops_when_loop_limit_is_exceeded():
+    action = _action(ActionType.THINK, action_id="act-loop", task="keep thinking")
+
+    result = build_default_action_router().execute(
+        action,
+        state={"sp_loop_iteration": 2, "sp_max_loop_iterations": 2},
+    )
+
+    assert result.next_step == "error_fatal"
+    assert "exceeded max iterations" in result.error
+
+
+def test_central_prompt_enforces_action_json_and_no_direct_tools():
+    prompt = CENTRAL_AGENT_ACTION_PROMPT
+
+    assert "Return JSON only" in prompt
+    assert "do not call business tools directly" in prompt
+    assert "search" in prompt
+    assert "bash" in prompt
+    assert "FINISH requires no pending human interaction" in prompt
