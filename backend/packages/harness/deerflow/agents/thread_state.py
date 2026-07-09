@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Annotated, NotRequired, TypedDict
+from typing import Annotated, Any, NotRequired, TypedDict
 
 from langchain.agents import AgentState
 
@@ -88,6 +88,18 @@ def merge_todos(existing: list | None, new: list | None) -> list | None:
 
 def merge_goal(existing: GoalState | None, new: GoalState | None) -> GoalState | None:
     """Reducer for goal state - preserves existing when a node does not touch it."""
+    if new is None:
+        return existing
+    return new
+
+
+SPTaskMemoryState = dict[str, Any]
+SPArtifactRefs = dict[str, Any]
+SPHumanInteraction = dict[str, Any]
+
+
+def merge_sp_task_memory(existing: SPTaskMemoryState | None, new: SPTaskMemoryState | None) -> SPTaskMemoryState | None:
+    """Reducer for SP task memory - preserves stack on untouched partial updates."""
     if new is None:
         return existing
     return new
@@ -237,3 +249,10 @@ class ThreadState(AgentState):
     delegations: Annotated[list[DelegationEntry], merge_delegations]
     skill_context: Annotated[list[SkillEntry], merge_skill_context]
     summary_text: NotRequired[str | None]
+    sp_task_memory: Annotated[SPTaskMemoryState | None, merge_sp_task_memory]
+    sp_current_stage: NotRequired[str | None]
+    sp_active_delegate_id: NotRequired[str | None]
+    sp_pending_human_interaction: NotRequired[SPHumanInteraction | None]
+    sp_current_artifact_refs: NotRequired[SPArtifactRefs | None]
+    sp_current_report_version: NotRequired[str | None]
+    sp_last_run_summary: NotRequired[str | None]

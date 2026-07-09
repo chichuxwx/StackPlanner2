@@ -19,6 +19,7 @@ from deerflow.agents.thread_state import (
     merge_delegations,
     merge_goal,
     merge_sandbox,
+    merge_sp_task_memory,
     merge_skill_context,
     merge_todos,
     merge_viewed_images,
@@ -103,6 +104,22 @@ class TestMergeGoal:
         existing = {"objective": "old", "status": "active"}
         new = {"objective": "new", "status": "active"}
         assert merge_goal(existing, new) == new
+
+
+class TestMergeSPTaskMemory:
+    """Reducer for StackPlanner task memory carried in ThreadState."""
+
+    def test_none_new_preserves_existing(self):
+        existing = {"version": 1, "entries": [{"id": "spmem_1"}]}
+        assert merge_sp_task_memory(existing, None) == existing
+
+    def test_none_existing_accepts_new(self):
+        new = {"version": 1, "entries": []}
+        assert merge_sp_task_memory(None, new) == new
+
+    def test_empty_dict_is_explicit_clear(self):
+        existing = {"version": 1, "entries": [{"id": "spmem_1"}]}
+        assert merge_sp_task_memory(existing, {}) == {}
 
 
 class TestMergeArtifacts:
@@ -352,3 +369,19 @@ class TestThreadStateAnnotations:
     def test_skill_context_field_is_wired_to_merge_skill_context(self):
         hints = get_type_hints(ThreadState, include_extras=True)
         assert merge_skill_context in hints["skill_context"].__metadata__
+
+    def test_sp_task_memory_field_is_wired_to_merge_sp_task_memory(self):
+        hints = get_type_hints(ThreadState, include_extras=True)
+        assert merge_sp_task_memory in hints["sp_task_memory"].__metadata__
+
+    def test_sp_orchestration_fields_exist(self):
+        hints = get_type_hints(ThreadState, include_extras=True)
+        for field_name in [
+            "sp_current_stage",
+            "sp_active_delegate_id",
+            "sp_pending_human_interaction",
+            "sp_current_artifact_refs",
+            "sp_current_report_version",
+            "sp_last_run_summary",
+        ]:
+            assert field_name in hints
