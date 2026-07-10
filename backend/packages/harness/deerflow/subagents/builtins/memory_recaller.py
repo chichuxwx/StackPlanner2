@@ -3,7 +3,7 @@
 from deerflow.subagents.config import SubagentConfig
 
 MEMORY_RECALLER_CONFIG = SubagentConfig(
-    name="memory_recaller",
+    name="sp-memory-recaller",
     description="""Read-only long-term memory recall specialist for StackPlanner CentralAgent actions.
 
 Use this subagent when:

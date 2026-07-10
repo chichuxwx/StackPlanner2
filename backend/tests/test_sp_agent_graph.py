@@ -1,0 +1,378 @@
+"""Checkpointed business-flow tests for the SP graph running on DR2 state."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import Any
+
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.checkpoint.memory import InMemorySaver
+
+from deerflow.sp import ActionRouter, ActionType, HandlerResult, SPAction, create_sp_agent_graph
+from deerflow.sp.memory import TaskMemoryStack
+from deerflow.sp.runtime import make_sp_agent
+
+
+class ScriptedDecider:
+    def __init__(self, actions: list[SPAction | dict[str, Any]]):
+        self.actions = actions
+        self.requests = []
+
+    def decide(self, request):
+        self.requests.append(request)
+        return self.actions[len(self.requests) - 1]
+
+
+class FakeJournal:
+    def __init__(self):
+        self.events: list[dict[str, Any]] = []
+
+    def record_custom_event(self, event_type: str, **kwargs: Any) -> None:
+        self.events.append({"event_type": event_type, **kwargs})
+
+
+def _action(action_type: ActionType, action_id: str, **kwargs: Any) -> SPAction:
+    return SPAction.create(
+        action_type,
+        action_id=action_id,
+        reason=kwargs.pop("reason", "graph test"),
+        **kwargs,
+    )
+
+
+def _graph(decider: ScriptedDecider, *, max_iterations: int = 8):
+    return create_sp_agent_graph(
+        decider=decider,
+        system_prompt="Return SP action JSON only.",
+        max_iterations=max_iterations,
+    )
+
+
+def test_graph_exposes_designed_action_loop_nodes():
+    graph = _graph(
+        ScriptedDecider(
+            [
+                _action(
+                    ActionType.FINISH,
+                    "finish",
+                    task="Done",
+                    metadata={"allow_without_artifact": True},
+                )
+            ]
+        )
+    )
+
+    nodes = set(graph.get_graph().nodes)
+
+    assert {
+        "prepare_context",
+        "central_decide",
+        "validate_action",
+        "execute_action",
+        "route_next",
+        "human_request",
+        "final_response",
+        "final_error",
+    } <= nodes
+
+
+def test_graph_runs_think_then_finish_and_emits_user_facing_message_and_events():
+    decider = ScriptedDecider(
+        [
+            _action(ActionType.THINK, "think-1", task="Plan the task", stage="planning"),
+            _action(
+                ActionType.FINISH,
+                "finish-1",
+                task="The task is complete.",
+                metadata={"allow_without_artifact": True},
+            ),
+        ]
+    )
+    journal = FakeJournal()
+
+    result = _graph(decider).invoke(
+        {"messages": [HumanMessage(content="Do the task", id="user-1")]},
+        context={"thread_id": "thread-1", "run_id": "run-1", "__run_journal": journal},
+    )
+
+    stack = TaskMemoryStack.from_dict(result["sp_task_memory"])
+    assert [entry.action for entry in stack.entries] == ["think", "finish"]
+    assert result["sp_current_stage"] == "finished"
+    assert result["sp_loop_iteration"] == 2
+    assert result["sp_loop_run_id"] == "run-1"
+    assert isinstance(result["messages"][-1], AIMessage)
+    assert result["messages"][-1].content == "The task is complete."
+    event_types = [event["event_type"] for event in journal.events]
+    assert "sp.action.created" in event_types
+    assert "sp.handler.completed" in event_types
+    assert event_types[-1] == "sp.loop.completed"
+
+
+def test_graph_recovers_from_invalid_action_without_losing_iteration_budget():
+    decider = ScriptedDecider(
+        [
+            {"action_type": "THINK", "reason": "missing action id", "task": "bad"},
+            _action(
+                ActionType.FINISH,
+                "finish-after-invalid",
+                task="Recovered and finished.",
+                metadata={"allow_without_artifact": True},
+            ),
+        ]
+    )
+
+    result = _graph(decider, max_iterations=3).invoke(
+        {"messages": [HumanMessage(content="Recover", id="user-1")]},
+        context={"thread_id": "thread-1", "run_id": "run-1"},
+    )
+
+    assert len(decider.requests) == 2
+    assert result["sp_loop_iteration"] == 2
+    assert result["sp_last_handler_result"]["next_step"] == "finish"
+    assert result["messages"][-1].content == "Recovered and finished."
+
+
+def test_graph_hitl_request_feedback_resume_and_finish():
+    first_graph = _graph(
+        ScriptedDecider(
+            [
+                _action(
+                    ActionType.ASK_HUMAN,
+                    "ask-1",
+                    task="Which report structure should I use?",
+                    stage="planning",
+                    metadata={
+                        "interaction_type": "outline_confirmation",
+                        "options": ["Conclusion first", "Evidence first"],
+                    },
+                )
+            ]
+        )
+    )
+    interrupted = first_graph.invoke(
+        {"messages": [HumanMessage(content="Draft a report", id="user-1")]},
+        context={"thread_id": "thread-1", "run_id": "run-1"},
+    )
+
+    request_message = interrupted["messages"][-1]
+    assert isinstance(request_message, ToolMessage)
+    request = request_message.artifact["human_input"]
+    assert request["source"] == "stackplanner"
+    assert request["input_mode"] == "choice_with_other"
+    assert interrupted["sp_pending_human_interaction"]["status"] == "pending"
+
+    feedback = HumanMessage(
+        content="For your clarification, my answer is: Conclusion first",
+        id="user-feedback",
+        additional_kwargs={
+            "hide_from_ui": True,
+            "human_input_response": {
+                "version": 1,
+                "kind": "human_input_response",
+                "source": "stackplanner",
+                "request_id": request["request_id"],
+                "response_kind": "option",
+                "option_id": "option-1",
+                "value": "Conclusion first",
+            },
+        },
+    )
+    second_graph = _graph(
+        ScriptedDecider(
+            [
+                _action(
+                    ActionType.FINISH,
+                    "finish-after-human",
+                    task="Applied the conclusion-first structure.",
+                    metadata={"allow_without_artifact": True},
+                )
+            ]
+        )
+    )
+    finished = second_graph.invoke(
+        {**interrupted, "messages": [*interrupted["messages"], feedback]},
+        context={"thread_id": "thread-1", "run_id": "run-2"},
+    )
+
+    stack = TaskMemoryStack.from_dict(finished["sp_task_memory"])
+    human_feedback = [entry for entry in stack.entries if entry.action == "feedback"]
+    assert len(human_feedback) == 1
+    assert human_feedback[0].content == "Conclusion first"
+    assert human_feedback[0].priority == "critical"
+    assert human_feedback[0].status == "pinned"
+    assert finished["sp_pending_human_interaction"] is None
+    assert finished["sp_loop_run_id"] == "run-2"
+    assert finished["sp_loop_iteration"] == 1
+
+
+def test_graph_restores_validated_action_from_dr2_checkpointer():
+    decider = ScriptedDecider(
+        [
+            _action(
+                ActionType.FINISH,
+                "checkpointed-finish",
+                task="Finished after checkpoint restore.",
+                metadata={"allow_without_artifact": True},
+            )
+        ]
+    )
+    graph = _graph(decider)
+    graph.checkpointer = InMemorySaver()
+    graph.interrupt_after_nodes = ["validate_action"]
+    config = {"configurable": {"thread_id": "checkpoint-thread"}}
+    context = {"thread_id": "checkpoint-thread", "run_id": "run-1"}
+
+    paused = graph.invoke(
+        {"messages": [HumanMessage(content="Checkpoint this", id="user-1")]},
+        config=config,
+        context=context,
+    )
+
+    assert paused["sp_current_action"]["action_id"] == "checkpointed-finish"
+    graph.interrupt_after_nodes = []
+    resumed = graph.invoke(None, config=config, context=context)
+
+    assert resumed["sp_last_handler_result"]["next_step"] == "finish"
+    assert resumed["messages"][-1].content == "Finished after checkpoint restore."
+    assert len(decider.requests) == 1
+
+
+def test_runtime_factory_builds_and_runs_stackplanner_graph(monkeypatch):
+    class FakeAppConfig:
+        models = [SimpleNamespace(name="test-model")]
+        title = SimpleNamespace(enabled=True, max_chars=60)
+
+        @staticmethod
+        def get_model_config(name):
+            assert name == "test-model"
+            return SimpleNamespace(supports_thinking=False)
+
+    class FakeModel:
+        def invoke(self, messages):
+            return AIMessage(content=('{"action_id":"runtime-finish","action_type":"FINISH","reason":"runtime smoke","task":"Runtime graph works.","metadata":{"allow_without_artifact":true}}'))
+
+    monkeypatch.setattr("deerflow.sp.runtime.create_chat_model", lambda **kwargs: FakeModel())
+    monkeypatch.setattr("deerflow.sp.runtime.build_tracing_callbacks", lambda: [])
+    config = {"configurable": {"model_name": "test-model"}}
+
+    graph = make_sp_agent(config, app_config=FakeAppConfig())
+    result = graph.invoke(
+        {"messages": [HumanMessage(content="Smoke test", id="user-1")]},
+        context={"thread_id": "thread-1", "run_id": "run-1"},
+    )
+
+    assert graph.metadata["agent_name"] == "stackplanner"
+    assert graph.metadata["model_name"] == "test-model"
+    assert graph.metadata["thinking_enabled"] is False
+    assert result["messages"][-1].content == "Runtime graph works."
+    assert result["title"] == "Smoke test"
+
+
+def test_duplicate_actions_still_consume_graph_loop_budget():
+    repeated = _action(
+        ActionType.THINK,
+        "repeat-think",
+        task="Do not run forever",
+        idempotency_key="stable-repeat",
+    )
+    decider = ScriptedDecider([repeated, repeated, repeated])
+
+    result = _graph(decider, max_iterations=3).invoke(
+        {"messages": [HumanMessage(content="Loop safely", id="user-1")]},
+        context={"thread_id": "thread-1", "run_id": "run-1"},
+    )
+
+    assert len(decider.requests) == 3
+    assert result["sp_loop_iteration"] == 3
+    assert result["sp_last_handler_result"]["next_step"] == "error_fatal"
+    assert "exceeded max iterations" in result["messages"][-1].content
+    stack = TaskMemoryStack.from_dict(result["sp_task_memory"])
+    assert [entry.action for entry in stack.entries] == ["think"]
+
+
+def test_broken_interrupt_without_pending_human_routes_to_final_error():
+    class BrokenInterruptHandler:
+        def handle(self, action, context):
+            return HandlerResult(next_step="interrupt")
+
+    router = ActionRouter({ActionType.THINK: BrokenInterruptHandler()})
+    graph = create_sp_agent_graph(
+        decider=ScriptedDecider([_action(ActionType.THINK, "broken", task="Interrupt incorrectly")]),
+        system_prompt="Return JSON only.",
+        router=router,
+    )
+
+    result = graph.invoke(
+        {"messages": [HumanMessage(content="Test defensive routing", id="user-1")]},
+        context={"thread_id": "thread-1", "run_id": "run-1"},
+    )
+
+    assert result["sp_last_handler_result"]["next_step"] == "error_fatal"
+    assert "without pending human interaction" in result["messages"][-1].content
+
+
+def test_graph_finish_emits_dry_run_promotion_without_writing_long_term_memory():
+    stack = TaskMemoryStack()
+    stack.append_feedback("以后默认先写结论，再给证据。")
+    journal = FakeJournal()
+    graph = _graph(
+        ScriptedDecider(
+            [
+                _action(
+                    ActionType.FINISH,
+                    "finish-promotion",
+                    task="Preference acknowledged.",
+                    metadata={"allow_without_artifact": True},
+                )
+            ]
+        )
+    )
+
+    result = graph.invoke(
+        {
+            "messages": [HumanMessage(content="Remember this preference", id="user-1")],
+            "sp_task_memory": stack.to_dict(),
+        },
+        context={"thread_id": "thread-1", "run_id": "run-1", "__run_journal": journal},
+    )
+
+    promotion_event = next(event for event in journal.events if event["event_type"] == "sp.memory.promotion.dry_run")
+    payload = promotion_event["content"]["payload"]
+    assert payload["candidate_count"] == 1
+    assert payload["approved_count"] == 1
+    assert payload["written_count"] == 0
+    assert payload["decisions"][0]["kind"] == "user_preference"
+    assert result["sp_current_stage"] == "finished"
+
+
+def test_graph_opts_into_task_memory_middleware_pruning():
+    stack = TaskMemoryStack(max_size=50)
+    for index in range(30):
+        stack.append_think(f"working-memory-{index}")
+    pinned = stack.append_feedback("Pinned feedback survives pruning")
+    graph = _graph(
+        ScriptedDecider(
+            [
+                _action(
+                    ActionType.FINISH,
+                    "finish-pruned",
+                    task="Pruning verified.",
+                    metadata={"allow_without_artifact": True},
+                )
+            ]
+        )
+    )
+
+    result = graph.invoke(
+        {
+            "messages": [HumanMessage(content="Bound the context", id="user-1")],
+            "sp_task_memory": stack.to_dict(),
+        },
+        context={"thread_id": "thread-1", "run_id": "run-1"},
+    )
+
+    restored = TaskMemoryStack.from_dict(result["sp_task_memory"])
+    active = restored.get_active_entries()
+    assert len(active) == 25  # middleware limit plus the terminal FINISH entry
+    assert next(entry for entry in restored.entries if entry.id == pinned.id).status == "pinned"
+    assert any(entry.status == "pruned" for entry in restored.entries)

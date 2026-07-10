@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 _LEGACY_SUMMARY_MESSAGE_NAME = "summary"
 _RECONCILED_TOOL_MESSAGE_NAMES = frozenset({"ask_clarification"})
-_PERSISTED_HIDDEN_HUMAN_INPUT_RESPONSE_SOURCES = frozenset({"ask_clarification"})
+_PERSISTED_HIDDEN_HUMAN_INPUT_RESPONSE_SOURCES = frozenset({"ask_clarification", "stackplanner"})
 
 
 def _should_persist_human_input_message(message: BaseMessage) -> bool:
@@ -120,6 +120,22 @@ class RunJournal(BaseCallbackHandler):
         self._persisted_tool_message_identities: set[str] = set()
 
     # -- Lifecycle callbacks --
+
+    def record_custom_event(
+        self,
+        event_type: str,
+        *,
+        content: Any = None,
+        category: str = "trace",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Record a framework extension event through the existing run buffer."""
+        self._put(
+            event_type=event_type,
+            category=category,
+            content=content,
+            metadata=metadata or {},
+        )
 
     @staticmethod
     def _message_text(message: BaseMessage) -> str:

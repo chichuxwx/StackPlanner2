@@ -327,6 +327,11 @@ def resolve_agent_factory(assistant_id: str | None):
     same factory; the routing happens inside ``make_lead_agent`` when it reads
     ``cfg["agent_name"]``.
     """
+    if assistant_id == "stackplanner":
+        from deerflow.sp.runtime import make_sp_agent
+
+        return make_sp_agent
+
     from deerflow.agents.lead_agent.agent import make_lead_agent
 
     return make_lead_agent
@@ -460,7 +465,7 @@ def build_run_config(
 
     # Inject custom agent name when the caller specified a non-default assistant.
     # Honour an explicit agent_name in either runtime options container.
-    if assistant_id and assistant_id != _DEFAULT_ASSISTANT_ID:
+    if assistant_id and assistant_id not in {_DEFAULT_ASSISTANT_ID, "stackplanner"}:
         normalized = assistant_id.strip().lower().replace("_", "-")
         if not normalized or not re.fullmatch(r"[a-z0-9-]+", normalized):
             raise ValueError(f"Invalid assistant_id {assistant_id!r}: must contain only letters, digits, and hyphens after normalization.")

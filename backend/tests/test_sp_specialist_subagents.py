@@ -1,19 +1,22 @@
 """Registration and isolation tests for SP-only DR2 subagents."""
 
-from deerflow.subagents.builtins import BUILTIN_SUBAGENTS, SP_SPECIALIST_CONFIGS
+from deerflow.subagents.builtins import BUILTIN_SUBAGENTS, SP_SPECIALIST_CONFIGS, SP_SPECIALIST_REGISTRY_NAMES
 from deerflow.subagents.registry import get_available_subagent_names, get_subagent_config, get_subagent_names
 
 
 def test_all_designed_sp_specialists_are_registered():
     expected = {"researcher", "coder", "reporter", "outline", "perception"}
+    expected_registry_names = {f"sp-{name}" for name in expected}
 
     assert set(SP_SPECIALIST_CONFIGS) == expected
-    assert expected <= set(BUILTIN_SUBAGENTS)
-    assert expected <= set(get_subagent_names())
+    assert set(SP_SPECIALIST_REGISTRY_NAMES.values()) == expected_registry_names
+    assert expected_registry_names <= set(BUILTIN_SUBAGENTS)
+    assert expected_registry_names <= set(get_subagent_names())
 
-    for name in expected:
-        config = get_subagent_config(name)
+    for role in expected:
+        config = get_subagent_config(SP_SPECIALIST_REGISTRY_NAMES[role])
         assert config is not None
+        assert config.name == f"sp-{role}"
         assert config.internal is True
         assert "Return one JSON object only" in config.system_prompt
         assert "Never place a full report or research dump in the summary" in config.system_prompt

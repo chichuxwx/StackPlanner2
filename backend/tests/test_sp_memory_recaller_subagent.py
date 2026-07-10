@@ -5,19 +5,19 @@ from deerflow.subagents.registry import get_subagent_config, get_subagent_names
 
 
 def test_memory_recaller_is_registered_as_builtin_subagent():
-    assert BUILTIN_SUBAGENTS["memory_recaller"] is MEMORY_RECALLER_CONFIG
-    assert "memory_recaller" in get_subagent_names()
+    assert BUILTIN_SUBAGENTS["sp-memory-recaller"] is MEMORY_RECALLER_CONFIG
+    assert "sp-memory-recaller" in get_subagent_names()
 
-    config = get_subagent_config("memory_recaller")
+    config = get_subagent_config("sp-memory-recaller")
 
     assert config is not None
-    assert config.name == "memory_recaller"
+    assert config.name == "sp-memory-recaller"
     assert config.max_turns == 20
     assert config.internal is True
 
 
 def test_memory_recaller_is_read_only_and_cannot_delegate_or_write_files():
-    config = get_subagent_config("memory_recaller")
+    config = get_subagent_config("sp-memory-recaller")
     assert config is not None
 
     assert "task" in config.disallowed_tools
@@ -36,7 +36,7 @@ def test_memory_recaller_runtime_chain_includes_read_only_dynamic_context():
     app_config = AppConfig.model_validate({"sandbox": {"use": "deerflow.sandbox.local:LocalSandboxProvider"}})
     middlewares = build_subagent_runtime_middlewares(
         app_config=app_config,
-        agent_name="memory_recaller",
+        agent_name="sp-memory-recaller",
     )
 
     assert sum(isinstance(middleware, DynamicContextMiddleware) for middleware in middlewares) == 1
@@ -51,7 +51,7 @@ def test_other_subagents_do_not_receive_long_term_memory_implicitly():
     app_config = AppConfig.model_validate({"sandbox": {"use": "deerflow.sandbox.local:LocalSandboxProvider"}})
     middlewares = build_subagent_runtime_middlewares(
         app_config=app_config,
-        agent_name="researcher",
+        agent_name="sp-researcher",
     )
 
     assert not any(isinstance(middleware, DynamicContextMiddleware) for middleware in middlewares)

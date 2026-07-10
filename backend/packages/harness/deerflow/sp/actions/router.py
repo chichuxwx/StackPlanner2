@@ -42,6 +42,14 @@ class ActionRouter:
 
         duplicate = self._duplicate_result(action, state, run_id=run_id)
         if duplicate is not None:
+            stack = TaskMemoryStack.from_dict(state.get("sp_task_memory"), thread_id=thread_id, run_id=run_id)
+            duplicate.state_update = self._build_state_update(
+                action,
+                state,
+                stack,
+                duplicate,
+                run_id=run_id,
+            )
             return duplicate
 
         limit_result = self._loop_limit_result(action, state, run_id=run_id)
@@ -69,7 +77,7 @@ class ActionRouter:
         except Exception as exc:  # pragma: no cover - defensive runtime boundary
             result = HandlerResult(next_step="error_recoverable", idempotency_key=action.idempotency_key, error=str(exc))
 
-        state_update = self._build_state_update(action, state, stack, result)
+        state_update = self._build_state_update(action, state, stack, result, run_id=run_id)
         result.state_update = {**result.state_update, **state_update}
         result.run_events = [
             *events,
@@ -91,6 +99,35 @@ class ActionRouter:
             return None
         last_result = state.get("sp_last_handler_result") if isinstance(state.get("sp_last_handler_result"), dict) else {}
         next_step = str(last_result.get("next_step") or "continue")
+        previous_action_type = last_result.get("action_type")
+        if previous_action_type and previous_action_type != action.action_type.value:
+            error = f"idempotency_key {action.idempotency_key!r} was already used by {previous_action_type}, not {action.action_type.value}"
+            return HandlerResult(
+                next_step="error_recoverable",
+                idempotency_key=action.idempotency_key,
+                error=error,
+                run_events=[
+                    make_sp_event(
+                        "sp.action.idempotency_collision",
+                        action_id=action.action_id,
+                        run_id=run_id,
+                        idempotency_key=action.idempotency_key,
+                        previous_action_type=previous_action_type,
+                        action_type=action.action_type.value,
+                        error=error,
+                    )
+                ],
+            )
+
+        # Recoverable failures are deliberately retryable with the same stable
+        # key. Successful side effects remain protected by duplicate skipping.
+        if next_step == "error_recoverable":
+            return None
+
+        # Once feedback has resolved an ASK_HUMAN action, replaying its stable
+        # key must continue rather than recreating an already-answered request.
+        if action.action_type == ActionType.ASK_HUMAN and not state.get("sp_pending_human_interaction"):
+            next_step = "continue"
         if next_step not in {"continue", "interrupt", "finish", "error_recoverable", "error_fatal"}:
             next_step = "continue"
         return HandlerResult(
@@ -100,7 +137,7 @@ class ActionRouter:
         )
 
     def _loop_limit_result(self, action: SPAction, state: Mapping[str, Any], *, run_id: str | None) -> HandlerResult | None:
-        loop_iteration = int(state.get("sp_loop_iteration") or 0)
+        loop_iteration = self._loop_iteration_for_run(state, run_id)
         max_loop_iterations = int(state.get("sp_max_loop_iterations") or DEFAULT_MAX_LOOP_ITERATIONS)
         if loop_iteration < max_loop_iterations:
             return None
@@ -125,17 +162,40 @@ class ActionRouter:
                 make_sp_event("sp.handler.failed", action_id=action.action_id, run_id=run_id, error=error),
             ],
         )
-        result.state_update = self._build_state_update(action, state, TaskMemoryStack.from_dict(state.get("sp_task_memory")), result)
+        result.state_update = self._build_state_update(
+            action,
+            state,
+            TaskMemoryStack.from_dict(state.get("sp_task_memory")),
+            result,
+            run_id=run_id,
+        )
         return result
 
-    def _build_state_update(self, action: SPAction, state: Mapping[str, Any], stack: TaskMemoryStack, result: HandlerResult) -> dict[str, Any]:
-        loop_iteration = int(state.get("sp_loop_iteration") or 0) + 1
+    @staticmethod
+    def _loop_iteration_for_run(state: Mapping[str, Any], run_id: str | None) -> int:
+        state_run_id = state.get("sp_loop_run_id")
+        if run_id and state_run_id and str(state_run_id) != run_id:
+            return 0
+        return int(state.get("sp_loop_iteration") or 0)
+
+    def _build_state_update(
+        self,
+        action: SPAction,
+        state: Mapping[str, Any],
+        stack: TaskMemoryStack,
+        result: HandlerResult,
+        *,
+        run_id: str | None,
+    ) -> dict[str, Any]:
+        loop_iteration = self._loop_iteration_for_run(state, run_id) + 1
         state_update: dict[str, Any] = {
             "sp_task_memory": stack.to_dict(),
             "sp_current_action_id": None,
+            "sp_current_action": None,
             "sp_last_action_id": action.action_id,
             "sp_last_idempotency_key": action.idempotency_key,
             "sp_loop_iteration": loop_iteration,
+            "sp_loop_run_id": run_id or state.get("sp_loop_run_id"),
             "sp_last_handler_result": {
                 "next_step": result.next_step,
                 "error": result.error,

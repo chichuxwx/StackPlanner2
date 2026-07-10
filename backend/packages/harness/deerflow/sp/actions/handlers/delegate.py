@@ -6,6 +6,7 @@ from typing import Any
 
 from deerflow.sp.actions.events import make_sp_event
 from deerflow.sp.actions.handlers.base import HandlerContext
+from deerflow.sp.actions.handlers.context import build_handler_context_refs
 from deerflow.sp.actions.schema import HandlerResult, SPAction
 from deerflow.sp.artifacts import SPArtifactAdapter
 from deerflow.sp.memory import StackMemoryEntry
@@ -21,18 +22,6 @@ def _compact_result(value: str | None, *, fallback: str) -> str:
         return text
     suffix = "...<truncated>"
     return f"{text[: OBSERVE_SUMMARY_MAX_CHARS - len(suffix)]}{suffix}"
-
-
-def _build_context_refs(context: HandlerContext) -> dict[str, Any]:
-    refs: dict[str, Any] = {}
-    artifact_refs = context.state.get("sp_current_artifact_refs")
-    if isinstance(artifact_refs, dict):
-        refs["artifact_refs"] = artifact_refs
-    pending_human = context.state.get("sp_pending_human_interaction")
-    if isinstance(pending_human, dict):
-        refs["pending_human_interaction"] = pending_human
-    refs["task_memory"] = context.stack.to_dict()
-    return refs
 
 
 class DelegateHandler:
@@ -70,7 +59,7 @@ class DelegateHandler:
             description=action.reason,
             input_refs=list(action.input_refs),
             expected_output=action.expected_output,
-            context_refs=_build_context_refs(context),
+            context_refs=build_handler_context_refs(context),
             thread_id=context.thread_id,
             run_id=context.run_id,
             metadata=action.metadata,

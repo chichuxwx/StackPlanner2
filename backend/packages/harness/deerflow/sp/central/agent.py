@@ -35,11 +35,21 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     try:
         payload = json.loads(stripped)
     except json.JSONDecodeError:
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start < 0 or end <= start:
+        decoder = json.JSONDecoder()
+        candidates: list[dict[str, Any]] = []
+        for start, character in enumerate(stripped):
+            if character != "{":
+                continue
+            try:
+                candidate, _ = decoder.raw_decode(stripped[start:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict):
+                candidates.append(candidate)
+        if not candidates:
             raise ValueError("CentralAgent output did not contain a JSON object") from None
-        payload = json.loads(stripped[start : end + 1])
+        action_candidates = [candidate for candidate in candidates if "action_type" in candidate]
+        payload = (action_candidates or candidates)[-1]
     if not isinstance(payload, dict):
         raise ValueError("CentralAgent output JSON must be an object")
     return payload

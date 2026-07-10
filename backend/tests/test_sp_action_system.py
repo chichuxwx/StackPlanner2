@@ -1,6 +1,7 @@
 """Tests for SP Action schema, router, and state-only handlers."""
 
 import pytest
+from langchain_core.messages import HumanMessage
 
 from deerflow.sp.actions import ActionType, ActionValidationError, SPAction, build_default_action_router
 from deerflow.sp.central import CENTRAL_AGENT_ACTION_PROMPT
@@ -35,6 +36,46 @@ def test_delegate_schema_requires_target_agent_and_task():
         SPAction.create(ActionType.DELEGATE, reason="Need research", task="Research")
     with pytest.raises(ActionValidationError, match="task"):
         SPAction.create(ActionType.DELEGATE, reason="Need research", target_agent="researcher")
+    with pytest.raises(ActionValidationError, match="Unsupported target_agent"):
+        SPAction.create(ActionType.DELEGATE, reason="Unknown role", target_agent="invented-agent", task="Do work")
+
+
+def test_finish_schema_requires_user_facing_task_text():
+    with pytest.raises(ActionValidationError, match="task"):
+        SPAction.create(ActionType.FINISH, reason="Done")
+
+
+def test_action_schema_rejects_unknown_control_values_and_destructive_backtrack():
+    with pytest.raises(ActionValidationError, match="Unsupported priority"):
+        _action(ActionType.THINK, action_id="bad-priority", task="Think", priority="urgent")
+    with pytest.raises(ActionValidationError, match="Unsupported stage"):
+        _action(ActionType.THINK, action_id="bad-stage", task="Think", stage="mystery")
+    with pytest.raises(ActionValidationError, match="backtrack_target_type"):
+        _action(
+            ActionType.BACKTRACK,
+            action_id="bad-target",
+            metadata={"backtrack_target_type": "checkpoint", "backtrack_target_id": "one"},
+        )
+    with pytest.raises(ActionValidationError, match="rollback_scope"):
+        _action(
+            ActionType.BACKTRACK,
+            action_id="bad-scope",
+            metadata={
+                "backtrack_target_type": "entry",
+                "backtrack_target_id": "one",
+                "rollback_scope": "delete_everything",
+            },
+        )
+    with pytest.raises(ActionValidationError, match="cannot delete artifact history"):
+        _action(
+            ActionType.BACKTRACK,
+            action_id="bad-artifact-delete",
+            metadata={
+                "backtrack_target_type": "artifact_version",
+                "backtrack_target_id": "v1",
+                "preserve_artifacts": False,
+            },
+        )
 
 
 def test_recall_memory_schema_requires_query_or_task():
@@ -73,15 +114,86 @@ def test_router_skips_duplicate_idempotency_key():
     router = build_default_action_router()
     state = {
         "sp_last_idempotency_key": "idem-1",
-        "sp_last_handler_result": {"next_step": "finish"},
+        "sp_last_handler_result": {"next_step": "finish", "action_type": "THINK"},
+        "sp_loop_iteration": 3,
     }
     action = _action(ActionType.THINK, action_id="act-repeat", idempotency_key="idem-1", task="Repeat")
 
     result = router.execute(action, state=state)
 
     assert result.next_step == "finish"
-    assert result.state_update == {}
+    assert result.state_update["sp_loop_iteration"] == 4
+    assert result.state_update["sp_last_handler_result"]["next_step"] == "finish"
+    assert TaskMemoryStack.from_dict(result.state_update["sp_task_memory"]).entries == []
     assert result.run_events[0]["event_type"] == "sp.action.duplicate_skipped"
+
+
+def test_router_retries_recoverable_action_with_same_idempotency_key():
+    state = {
+        "sp_last_idempotency_key": "idem-retry",
+        "sp_last_handler_result": {
+            "next_step": "error_recoverable",
+            "action_type": "THINK",
+            "error": "temporary failure",
+        },
+        "sp_loop_iteration": 1,
+    }
+    action = _action(
+        ActionType.THINK,
+        action_id="act-retry",
+        idempotency_key="idem-retry",
+        task="Retry after recovery",
+    )
+
+    result = build_default_action_router().execute(action, state=state)
+
+    assert result.next_step == "continue"
+    assert result.state_update["sp_loop_iteration"] == 2
+    stack = TaskMemoryStack.from_dict(result.state_update["sp_task_memory"])
+    assert stack.entries[-1].content == "Retry after recovery"
+    assert any(event["event_type"] == "sp.handler.completed" for event in result.run_events)
+
+
+def test_router_does_not_reopen_answered_duplicate_human_request():
+    state = {
+        "sp_last_idempotency_key": "idem-human",
+        "sp_last_handler_result": {"next_step": "interrupt", "action_type": "ASK_HUMAN"},
+        "sp_pending_human_interaction": None,
+        "sp_loop_iteration": 1,
+    }
+    action = _action(
+        ActionType.ASK_HUMAN,
+        action_id="act-human",
+        idempotency_key="idem-human",
+        task="Already answered?",
+    )
+
+    result = build_default_action_router().execute(action, state=state)
+
+    assert result.next_step == "continue"
+    assert result.state_update["sp_loop_iteration"] == 2
+    assert "sp_pending_human_interaction" not in result.state_update
+    assert result.run_events[0]["event_type"] == "sp.action.duplicate_skipped"
+
+
+def test_router_rejects_idempotency_key_collision_across_action_types():
+    state = {
+        "sp_last_idempotency_key": "idem-collision",
+        "sp_last_handler_result": {"next_step": "continue", "action_type": "THINK"},
+    }
+    action = _action(
+        ActionType.SUMMARIZE,
+        action_id="act-summary",
+        idempotency_key="idem-collision",
+        task="Do not silently reuse this key",
+    )
+
+    result = build_default_action_router().execute(action, state=state)
+
+    assert result.next_step == "error_recoverable"
+    assert "already used by THINK" in str(result.error)
+    assert result.state_update["sp_loop_iteration"] == 1
+    assert result.run_events[0]["event_type"] == "sp.action.idempotency_collision"
 
 
 def test_summarize_handler_condenses_sources_without_touching_pinned_feedback():
@@ -294,6 +406,51 @@ def test_delegate_handler_calls_executor_and_externalizes_large_result(tmp_path)
     assert any(event["event_type"] == "sp.delegate.completed" for event in result.run_events)
 
 
+def test_delegate_context_is_bounded_and_preserves_user_goal_and_pinned_feedback():
+    stack = TaskMemoryStack(max_size=50)
+    for index in range(30):
+        stack.append_think(f"old-control-entry-{index}", metadata={"large": "x" * 1000})
+    feedback = stack.append_feedback("Pinned report constraint")
+    state = {
+        "sp_task_memory": stack.to_dict(),
+        "messages": [
+            HumanMessage(content="Original report request"),
+            HumanMessage(content="Internal response", additional_kwargs={"hide_from_ui": True}),
+            HumanMessage(content="Latest visible refinement"),
+        ],
+        "sp_current_artifact_refs": {
+            "report_revision": {"artifact_id": "current", "type": "report_revision"},
+            "_history": [{"artifact_id": f"report-{index}"} for index in range(20)],
+        },
+    }
+    executor = FakeSubagentExecutor(
+        SPSubagentResult(
+            status=SPSubagentStatus.COMPLETED,
+            result="Reporter accepted the bounded task context.",
+            task_id="task-context",
+        )
+    )
+    action = _action(
+        ActionType.DELEGATE,
+        action_id="act-context",
+        target_agent="reporter",
+        task="Revise the report",
+    )
+
+    result = build_default_action_router(delegate_executor=executor).execute(action, state=state)
+
+    assert result.next_step == "continue"
+    refs = executor.tasks[0].context_refs
+    assert refs["original_query"] == "Original report request"
+    assert refs["latest_user_input"] == "Latest visible refinement"
+    selected = refs["task_memory"]["entries"]
+    assert len(selected) == 24
+    assert selected[0]["id"] == feedback.id
+    assert selected[0]["status"] == "pinned"
+    assert all("metadata" not in entry for entry in selected)
+    assert len(refs["artifact_refs"]["_history"]) == 12
+
+
 def test_delegate_handler_records_failure_as_recoverable_error():
     executor = FakeSubagentExecutor(
         SPSubagentResult(
@@ -462,6 +619,24 @@ def test_router_stops_when_loop_limit_is_exceeded():
     assert "exceeded max iterations" in result.error
 
 
+def test_router_resets_loop_budget_when_dr2_run_id_changes():
+    action = _action(ActionType.THINK, action_id="act-new-run", task="Continue in a new run")
+
+    result = build_default_action_router().execute(
+        action,
+        state={
+            "sp_loop_iteration": 20,
+            "sp_loop_run_id": "old-run",
+            "sp_max_loop_iterations": 20,
+        },
+        run_id="new-run",
+    )
+
+    assert result.next_step == "continue"
+    assert result.state_update["sp_loop_iteration"] == 1
+    assert result.state_update["sp_loop_run_id"] == "new-run"
+
+
 def test_central_prompt_enforces_action_json_and_no_direct_tools():
     prompt = CENTRAL_AGENT_ACTION_PROMPT
 
@@ -470,4 +645,7 @@ def test_central_prompt_enforces_action_json_and_no_direct_tools():
     assert "search" in prompt
     assert "bash" in prompt
     assert "FINISH requires no pending human interaction" in prompt
+    assert "allow_without_artifact=true" in prompt
     assert "handler routes to memory_recaller" in prompt
+    assert "Do not repeatedly emit THINK" in prompt
+    assert "After BACKTRACK, choose REPLAN" in prompt

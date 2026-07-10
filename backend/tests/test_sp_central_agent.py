@@ -58,6 +58,21 @@ def test_central_agent_decider_rejects_non_json_output():
         CentralAgentDecider(model=model).decide(request)
 
 
+def test_central_agent_decider_selects_final_action_from_noisy_model_output():
+    model = FakeCentralModel('Considered {"note":"not the action"}. Final: {"action_id":"act-final","action_type":"FINISH","reason":"done","task":"Completed","metadata":{"allow_without_artifact":true}}')
+    request = CentralDecisionRequest(
+        system_prompt=CENTRAL_AGENT_ACTION_PROMPT,
+        task_context="<sp-task-context />",
+        state={},
+        iteration=1,
+    )
+
+    action = SPAction.from_dict(CentralAgentDecider(model=model).decide(request))
+
+    assert action.action_id == "act-final"
+    assert action.action_type == "FINISH"
+
+
 def test_create_sp_action_loop_uses_toolless_central_decider_model():
     model = FakeCentralModel('{"action_id":"act-finish","action_type":"FINISH","reason":"Report is ready","task":"Done"}')
     loop = create_sp_action_loop(model=model, max_iterations=1)

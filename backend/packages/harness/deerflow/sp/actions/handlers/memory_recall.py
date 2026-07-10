@@ -6,27 +6,12 @@ from typing import Any
 
 from deerflow.sp.actions.events import make_sp_event
 from deerflow.sp.actions.handlers.base import HandlerContext
+from deerflow.sp.actions.handlers.context import build_handler_context_refs
 from deerflow.sp.actions.schema import HandlerResult, SPAction
 from deerflow.sp.memory import StackMemoryEntry, normalize_memory_recall_result
 from deerflow.sp.subagents import SPSubagentExecutorProtocol, SPSubagentResult, SPSubagentTask
 
 MEMORY_RECALLER_AGENT = "memory_recaller"
-
-
-def _build_context_refs(context: HandlerContext) -> dict[str, Any]:
-    refs: dict[str, Any] = {
-        "task_memory": context.stack.to_dict(),
-    }
-    artifact_refs = context.state.get("sp_current_artifact_refs")
-    if isinstance(artifact_refs, dict):
-        refs["artifact_refs"] = artifact_refs
-    pending_human = context.state.get("sp_pending_human_interaction")
-    if isinstance(pending_human, dict):
-        refs["pending_human_interaction"] = pending_human
-    current_stage = context.state.get("sp_current_stage")
-    if current_stage:
-        refs["current_stage"] = str(current_stage)
-    return refs
 
 
 def _build_recall_task(query: str, action: SPAction) -> str:
@@ -78,7 +63,7 @@ class MemoryRecallHandler:
             description=action.reason,
             input_refs=list(action.input_refs),
             expected_output=action.expected_output or "read-only normalized memory recall",
-            context_refs=_build_context_refs(context),
+            context_refs=build_handler_context_refs(context),
             thread_id=context.thread_id,
             run_id=context.run_id,
             metadata={

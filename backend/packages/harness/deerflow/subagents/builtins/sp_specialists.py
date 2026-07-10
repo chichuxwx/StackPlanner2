@@ -33,7 +33,7 @@ def _prompt(role: str, instructions: str) -> str:
 
 
 RESEARCHER_CONFIG = SubagentConfig(
-    name="researcher",
+    name="sp-researcher",
     description="Evidence-focused research specialist for StackPlanner DELEGATE actions.",
     system_prompt=_prompt(
         "researcher",
@@ -55,7 +55,7 @@ RESEARCHER_CONFIG = SubagentConfig(
 
 
 CODER_CONFIG = SubagentConfig(
-    name="coder",
+    name="sp-coder",
     description="Repository implementation and verification specialist for StackPlanner DELEGATE actions.",
     system_prompt=_prompt(
         "coder",
@@ -77,7 +77,7 @@ CODER_CONFIG = SubagentConfig(
 
 
 REPORTER_CONFIG = SubagentConfig(
-    name="reporter",
+    name="sp-reporter",
     description="Report synthesis and revision specialist for StackPlanner DELEGATE actions.",
     system_prompt=_prompt(
         "reporter",
@@ -99,7 +99,7 @@ REPORTER_CONFIG = SubagentConfig(
 
 
 OUTLINE_CONFIG = SubagentConfig(
-    name="outline",
+    name="sp-outline",
     description="Evidence-aware outline planning specialist for StackPlanner DELEGATE actions.",
     system_prompt=_prompt(
         "outline",
@@ -121,7 +121,7 @@ OUTLINE_CONFIG = SubagentConfig(
 
 
 PERCEPTION_CONFIG = SubagentConfig(
-    name="perception",
+    name="sp-perception",
     description="Input inspection and multimodal perception specialist for StackPlanner DELEGATE actions.",
     system_prompt=_prompt(
         "perception",
@@ -143,12 +143,12 @@ PERCEPTION_CONFIG = SubagentConfig(
 
 
 SP_SPECIALIST_CONFIGS = {
-    config.name: config
-    for config in (
-        RESEARCHER_CONFIG,
-        CODER_CONFIG,
-        REPORTER_CONFIG,
-        OUTLINE_CONFIG,
-        PERCEPTION_CONFIG,
-    )
+    "researcher": RESEARCHER_CONFIG,
+    "coder": CODER_CONFIG,
+    "reporter": REPORTER_CONFIG,
+    "outline": OUTLINE_CONFIG,
+    "perception": PERCEPTION_CONFIG,
 }
+
+SP_SPECIALIST_REGISTRY_CONFIGS = {config.name: config for config in SP_SPECIALIST_CONFIGS.values()}
+SP_SPECIALIST_REGISTRY_NAMES = {role: config.name for role, config in SP_SPECIALIST_CONFIGS.items()}

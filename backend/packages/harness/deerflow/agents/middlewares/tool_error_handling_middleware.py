@@ -298,7 +298,7 @@ def build_subagent_runtime_middlewares(
     # Read-only recall needs the same DR2 long-term-memory snapshot that the
     # lead receives. Do not attach MemoryMiddleware here: that middleware
     # queues writes, while memory_recaller is deliberately read-only.
-    if agent_name == "memory_recaller":
+    if agent_name == "sp-memory-recaller":
         from deerflow.agents.middlewares.dynamic_context_middleware import DynamicContextMiddleware
 
         middlewares.append(DynamicContextMiddleware(agent_name=None, app_config=app_config))

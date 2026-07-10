@@ -167,6 +167,24 @@ class TestLlmCallbacks:
 
 class TestLifecycleCallbacks:
     @pytest.mark.anyio
+    async def test_record_custom_event_uses_existing_run_event_buffer(self, journal_setup):
+        j, store = journal_setup
+
+        j.record_custom_event(
+            "sp.action.created",
+            content={"action_id": "act-1"},
+            metadata={"source": "stackplanner"},
+        )
+        await j.flush()
+
+        events = await store.list_events("t1", "r1")
+        assert len(events) == 1
+        assert events[0]["event_type"] == "sp.action.created"
+        assert events[0]["category"] == "trace"
+        assert events[0]["content"] == {"action_id": "act-1"}
+        assert events[0]["metadata"]["source"] == "stackplanner"
+
+    @pytest.mark.anyio
     async def test_chain_start_end_produce_trace_events(self, journal_setup):
         j, store = journal_setup
         j.on_chain_start({}, {}, run_id=uuid4(), parent_run_id=None)

@@ -30,6 +30,13 @@ class ActionType(StrEnum):
     FINISH = "FINISH"
 
 
+ALLOWED_DELEGATE_AGENTS = frozenset({"researcher", "coder", "reporter", "outline", "perception"})
+ALLOWED_STAGES = frozenset({"perception", "planning", "research", "implementation", "reporting", "revision", "verification", "finished"})
+ALLOWED_PRIORITIES = frozenset({"critical", "high", "normal", "low"})
+ALLOWED_BACKTRACK_TARGET_TYPES = frozenset({"entry", "stage", "artifact_version", "delegation"})
+ALLOWED_ROLLBACK_SCOPES = frozenset({"memory_only", "artifact_refs", "delegation", "stage", "full_working_state"})
+
+
 def _json_safe(value: Any) -> Any:
     if value is None or isinstance(value, str | int | float | bool):
         return value
@@ -157,19 +164,39 @@ class SPAction:
         return cls.from_dict(payload)
 
     def validate(self) -> None:
+        if self.priority not in ALLOWED_PRIORITIES:
+            allowed = ", ".join(sorted(ALLOWED_PRIORITIES))
+            raise ActionValidationError(f"Unsupported priority {self.priority!r}; allowed: {allowed}")
+        if self.stage is not None and self.stage not in ALLOWED_STAGES:
+            allowed = ", ".join(sorted(ALLOWED_STAGES))
+            raise ActionValidationError(f"Unsupported stage {self.stage!r}; allowed: {allowed}")
         if self.action_type == ActionType.DELEGATE:
-            _require_text(self.target_agent, "target_agent")
+            target_agent = _require_text(self.target_agent, "target_agent")
+            if target_agent not in ALLOWED_DELEGATE_AGENTS:
+                allowed = ", ".join(sorted(ALLOWED_DELEGATE_AGENTS))
+                raise ActionValidationError(f"Unsupported target_agent {target_agent!r}; allowed: {allowed}")
             _require_text(self.task, "task")
         elif self.action_type == ActionType.RECALL_MEMORY:
             query = self.metadata.get("memory_query") or self.task
             _require_text(query, "metadata.memory_query or task")
         elif self.action_type == ActionType.BACKTRACK:
-            _require_text(self.metadata.get("backtrack_target_type"), "metadata.backtrack_target_type")
+            target_type = _require_text(self.metadata.get("backtrack_target_type"), "metadata.backtrack_target_type")
             _require_text(self.metadata.get("backtrack_target_id"), "metadata.backtrack_target_id")
+            if target_type not in ALLOWED_BACKTRACK_TARGET_TYPES:
+                allowed = ", ".join(sorted(ALLOWED_BACKTRACK_TARGET_TYPES))
+                raise ActionValidationError(f"Unsupported backtrack_target_type {target_type!r}; allowed: {allowed}")
+            rollback_scope = str(self.metadata.get("rollback_scope") or "memory_only")
+            if rollback_scope not in ALLOWED_ROLLBACK_SCOPES:
+                allowed = ", ".join(sorted(ALLOWED_ROLLBACK_SCOPES))
+                raise ActionValidationError(f"Unsupported rollback_scope {rollback_scope!r}; allowed: {allowed}")
+            if self.metadata.get("preserve_artifacts") is False:
+                raise ActionValidationError("BACKTRACK cannot delete artifact history; metadata.preserve_artifacts must not be false")
         elif self.action_type == ActionType.SUMMARIZE:
             _require_text(self.task or self.metadata.get("summary"), "task or metadata.summary")
         elif self.action_type == ActionType.ASK_HUMAN:
             _require_text(self.task or self.metadata.get("question"), "task or metadata.question")
+        elif self.action_type == ActionType.FINISH:
+            _require_text(self.task, "task")
 
     def to_dict(self) -> dict[str, Any]:
         return {
