@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { describe, expect, test } from "@rstest/core";
 
 import {
+  PRODUCT_ASSISTANT_ID,
   PRODUCT_MARK_PATH,
   PRODUCT_NAME,
   PRODUCT_REPOSITORY_URL,
@@ -17,6 +18,7 @@ describe("StackPlanner product branding", () => {
       "https://github.com/chichuxwx/StackPlanner2",
     );
     expect(RUNTIME_NAME).toBe("DeerFlow 2.0");
+    expect(PRODUCT_ASSISTANT_ID).toBe("stackplanner");
   });
 
   test("ships an accessible, gradient-free product mark", () => {

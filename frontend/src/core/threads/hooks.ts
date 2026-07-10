@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
+import { PRODUCT_ASSISTANT_ID } from "@/core/branding";
 
 import { getAPIClient } from "../api";
 import { fetch } from "../api/fetcher";
@@ -52,6 +53,7 @@ export type ThreadStreamOptions = {
   displayThreadId?: string | null | undefined;
   context: LocalSettings["context"];
   isMock?: boolean;
+  assistantId?: string;
   onSend?: (threadId: string) => void;
   onStart?: (threadId: string, runId: string) => void;
   onFinish?: (state: AgentThreadState) => void;
@@ -788,6 +790,7 @@ export function useThreadStream({
   displayThreadId,
   context,
   isMock,
+  assistantId = PRODUCT_ASSISTANT_ID,
   onSend,
   onStart,
   onFinish,
@@ -889,7 +892,7 @@ export function useThreadStream({
 
   const thread = useStream<AgentThreadState>({
     client: getAPIClient(isMock),
-    assistantId: "lead_agent",
+    assistantId,
     threadId: onStreamThreadId,
     reconnectOnMount: true,
     fetchStateHistory: { limit: 1 },

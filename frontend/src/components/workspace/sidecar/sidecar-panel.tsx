@@ -187,6 +187,7 @@ export function SidecarPanel({ className }: { className?: string }) {
   } = useThreadStream({
     threadId: sidecar.sidecarThreadId ?? undefined,
     displayThreadId: sidecar.sidecarThreadId ?? undefined,
+    assistantId: "lead_agent",
     context: sidecar.context,
     isMock: sidecar.isMock,
     onStart: (createdThreadId) => {
