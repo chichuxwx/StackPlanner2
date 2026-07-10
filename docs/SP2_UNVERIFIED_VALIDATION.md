@@ -1,7 +1,7 @@
 # SP2.0 暂未完成验证项
 
 > 更新日期：2026-07-11
-> 本地实现基线：`a777d9d` + 本轮工作树修改
+> 本地实现基线：`codex/sp-memory-migration` 本轮审计提交
 > 完整迁移审计与演示 Case：`docs/SP2_MIGRATION_FINAL_AUDIT_AND_DEMO_CASE.md`
 
 ## 当前结论
@@ -24,9 +24,11 @@
 - Frontend unit：`588 passed`。
 - Next.js production build。
 
+当前修改已推送到 `origin/codex/sp-memory-migration`。仓库工作流只在 Pull Request 上触发，原 PR #2 已关闭，因此本轮新 SHA 没有自动创建 Actions run。
+
 仍需完成：
 
-- [ ] 推送当前修改并重新运行 GitHub Actions。
+- [ ] 为当前迁移分支创建新 PR，触发 GitHub Actions。
 - [ ] 确认 CI 使用仓库声明的 `pnpm 10.26.2` 后仍通过。
 
 本机 `pnpm 10.11.0` 自动下载 10.26.2 时受 npm 证书链影响；本地检查使用已安装在 `node_modules/.bin` 的锁定工具完成。

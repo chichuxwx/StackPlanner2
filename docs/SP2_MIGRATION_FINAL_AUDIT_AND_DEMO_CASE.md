@@ -1,7 +1,7 @@
 # SP2.0 迁移终审与演示 Case
 
 > 审计日期：2026-07-11
-> 代码基线：`a777d9d` + 本轮工作树修改
+> 代码基线：`codex/sp-memory-migration` 本轮审计提交
 > 目标：确认 StackPlanner 的控制语义已迁入 DeerFlow 2.0 Runtime，并设计一个能同时体现短期、中期、长期记忆优势的可复现实验。
 
 ## 1. 结论
@@ -85,7 +85,7 @@ RECALL_MEMORY
 - Frontend unit：`588 passed`。
 - Next.js production build：通过，存在 1 条既有 Turbopack NFT trace warning。
 
-本机 `pnpm 10.11.0` 自动获取仓库声明的 `pnpm 10.26.2` 时仍受 npm 证书链影响；上述检查使用现有 `node_modules/.bin` 中的锁定工具完成。CI 需要在推送后重新运行，历史失败 run 本身不会变成成功。
+本机 `pnpm 10.11.0` 自动获取仓库声明的 `pnpm 10.26.2` 时仍受 npm 证书链影响；上述检查使用现有 `node_modules/.bin` 中的锁定工具完成。修改已经推送到迁移分支，但工作流只在 Pull Request 上触发，原 PR 已关闭，因此新 SHA 尚无 Actions 结果；需要重新创建 PR 才能让 CI 重跑。历史失败 run 本身不会变成成功。
 
 ## 3. 迁移方案逐项终审
 
