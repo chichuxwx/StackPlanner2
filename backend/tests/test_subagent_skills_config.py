@@ -509,6 +509,7 @@ class TestRegistryAvailableNames:
         names = get_subagent_names()
         assert "general-purpose" in names
         assert "bash" in names
+        assert "sp-memory-recaller" in names
 
     def test_includes_custom_names(self):
         from deerflow.subagents.registry import get_subagent_names
@@ -530,6 +531,7 @@ class TestRegistryAvailableNames:
         names = get_subagent_names()
         assert "general-purpose" in names
         assert "bash" in names
+        assert "sp-memory-recaller" in names
         assert "analysis" in names
         assert "researcher" in names
 
@@ -577,6 +579,7 @@ class TestRegistryListSubagentsWithCustom:
         names = {c.name for c in configs}
         assert "general-purpose" in names
         assert "bash" in names
+        assert "sp-memory-recaller" in names
         assert "analysis" in names
 
     def test_list_custom_agent_has_correct_skills(self):

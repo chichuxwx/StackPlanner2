@@ -153,7 +153,7 @@ def get_available_subagent_names(*, app_config: Any | None = None) -> list[str]:
     Returns:
         List of subagent names visible to the current sandbox configuration.
     """
-    names = get_subagent_names(app_config=app_config)
+    names = [name for name in get_subagent_names(app_config=app_config) if not ((config := get_subagent_config(name, app_config=app_config)) and config.internal)]
     try:
         host_bash_allowed = is_host_bash_allowed(app_config) if hasattr(app_config, "sandbox") else is_host_bash_allowed()
     except Exception:

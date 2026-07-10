@@ -342,6 +342,15 @@ def test_build_run_config_lead_agent_no_agent_name():
     assert "run_name" not in config
 
 
+def test_build_run_config_stackplanner_is_builtin_not_custom_agent():
+    """The SP assistant must not be misrouted through custom-agent SOUL loading."""
+    from app.gateway.services import build_run_config
+
+    config = build_run_config("thread-1", None, None, assistant_id="stackplanner")
+    assert "agent_name" not in config["configurable"]
+    assert "agent_name" not in config.get("context", {})
+
+
 def test_build_run_config_none_assistant_id_no_agent_name():
     """None assistant_id must NOT inject configurable['agent_name']."""
     from app.gateway.services import build_run_config
@@ -386,13 +395,15 @@ def test_build_run_config_context_custom_agent_injects_agent_name():
     assert config["configurable"]["agent_name"] == "finalis"
 
 
-def test_resolve_agent_factory_returns_make_lead_agent():
-    """resolve_agent_factory always returns make_lead_agent regardless of assistant_id."""
+def test_resolve_agent_factory_routes_only_stackplanner_to_sp_graph():
+    """Built-in SP routing must leave lead and custom agent behavior unchanged."""
     from app.gateway.services import resolve_agent_factory
     from deerflow.agents.lead_agent.agent import make_lead_agent
+    from deerflow.sp.runtime import make_sp_agent
 
     assert resolve_agent_factory(None) is make_lead_agent
     assert resolve_agent_factory("lead_agent") is make_lead_agent
+    assert resolve_agent_factory("stackplanner") is make_sp_agent
     assert resolve_agent_factory("finalis") is make_lead_agent
     assert resolve_agent_factory("custom-agent-123") is make_lead_agent
 

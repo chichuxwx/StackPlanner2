@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from deerflow.sp.memory import StackMemoryEntry, TaskMemoryStack
+from deerflow.sp.memory.entry import MAX_ENTRY_CONTENT_CHARS, MAX_METADATA_JSON_CHARS
 
 
 def test_legacy_memory_stack_json_restores_feedback_as_pinned_critical():
@@ -133,3 +134,29 @@ def test_short_term_stack_supports_designed_sp_control_flow():
     assert backtrack.failure_note == "Delegation target was too broad"
     assert stack.get_checkpoint("planning") == replan
     assert finish.stage == "finished"
+
+
+def test_entry_bounds_large_content_and_metadata_before_thread_state_serialization():
+    entry = StackMemoryEntry(
+        action="observe",
+        content="x" * (MAX_ENTRY_CONTENT_CHARS + 500),
+        metadata={"action_id": "act-large", "raw_research": "y" * (MAX_METADATA_JSON_CHARS + 500)},
+    )
+
+    assert len(entry.content) == MAX_ENTRY_CONTENT_CHARS
+    assert entry.content.endswith("...<truncated>")
+    assert entry.metadata["action_id"] == "act-large"
+    assert entry.metadata["_truncated"] is True
+    assert len(json.dumps(entry.metadata, ensure_ascii=False)) < MAX_METADATA_JSON_CHARS
+
+
+def test_checkpoint_restore_is_idempotent_after_bounds_are_applied():
+    stack = TaskMemoryStack(max_size=3)
+    stack.append_feedback("Latest correction")
+    stack.append_observe("z" * 5000, actor="researcher")
+
+    first_restore = TaskMemoryStack.from_dict(stack.to_dict())
+    second_restore = TaskMemoryStack.from_dict(first_restore.to_dict())
+
+    assert second_restore.to_dict() == first_restore.to_dict()
+    assert second_restore.entries[0].status == "pinned"

@@ -1,5 +1,7 @@
 """Tests for SP prompt context rendering."""
 
+from datetime import UTC, datetime, timedelta
+
 from deerflow.sp.memory import TaskMemoryStack
 from deerflow.sp.prompt import PromptContextBuilder
 
@@ -44,3 +46,36 @@ def test_context_uses_refs_without_requiring_artifact_bodies():
     assert "artifact://report" in context
     assert "current_report_version: v1" in context
     assert "do not infer large artifact bodies" in context
+
+
+def test_context_keeps_newest_feedback_when_pinned_window_is_full():
+    stack = TaskMemoryStack(max_size=30)
+    base = datetime(2026, 7, 10, tzinfo=UTC)
+    for index in range(15):
+        stack.append_feedback(
+            f"feedback-{index}",
+            ts=(base + timedelta(minutes=index)).isoformat(),
+        )
+
+    context = PromptContextBuilder(recent_entry_limit=12).build(stack)
+
+    assert "feedback-14" in context
+    assert "feedback-3" in context
+    assert "feedback-2" not in context
+    assert "feedback-0" not in context
+
+
+def test_context_renders_critical_feedback_before_large_artifact_refs():
+    stack = TaskMemoryStack()
+    stack.append_memory_recall("Old memory says use a narrative opening")
+    stack.append_feedback("Use a conclusion-first structure")
+
+    context = PromptContextBuilder(max_chars=1000).build(
+        stack,
+        artifact_refs={"research": "artifact://" + "x" * 3000},
+    )
+
+    assert len(context) <= 1000
+    assert context.endswith("</sp-task-context>")
+    assert "Use a conclusion-first structure" in context
+    assert context.index("Use a conclusion-first structure") < context.find("current_artifact_refs:") or "current_artifact_refs:" not in context

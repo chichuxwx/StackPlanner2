@@ -41,9 +41,9 @@ def _json_ref(value: Any, *, max_chars: int) -> str:
     return _compact(value, max_chars=max_chars)
 
 
-def _entry_sort_key(entry: StackMemoryEntry) -> tuple[int, str]:
+def _entry_priority_rank(entry: StackMemoryEntry) -> int:
     priority_rank = {"critical": 0, "high": 1, "normal": 2, "low": 3}.get(entry.priority, 2)
-    return priority_rank, entry.ts
+    return priority_rank
 
 
 @dataclass(slots=True)
@@ -69,10 +69,7 @@ class PromptContextBuilder:
             "<sp-task-context>",
             "CentralAgent control context. Use this as task memory, not as tool output.",
             f"current_stage: {current_stage or 'unknown'}",
-            f"active_delegate_id: {active_delegate_id or 'none'}",
             f"pending_human_interaction: {_json_ref(pending_human_interaction, max_chars=900)}",
-            f"current_artifact_refs: {_json_ref(artifact_refs, max_chars=1200)}",
-            f"current_report_version: {report_version or 'none'}",
             "",
             "priority_rules:",
             "- Critical or pinned human feedback outranks summaries, observations, and model plans.",
@@ -84,6 +81,15 @@ class PromptContextBuilder:
             lines.extend(["", "critical_feedback:"])
             lines.extend(self._format_entries(pinned))
 
+        lines.extend(
+            [
+                "",
+                f"active_delegate_id: {active_delegate_id or 'none'}",
+                f"current_artifact_refs: {_json_ref(artifact_refs, max_chars=1200)}",
+                f"current_report_version: {report_version or 'none'}",
+            ]
+        )
+
         recent = self._select_recent(stack, exclude_ids={entry.id for entry in pinned})
         if recent:
             lines.extend(["", "recent_task_memory:"])
@@ -93,11 +99,15 @@ class PromptContextBuilder:
         return self._clip_lines(lines)
 
     def _select_pinned(self, stack: TaskMemoryStack) -> list[StackMemoryEntry]:
-        pinned = sorted(stack.get_pinned_entries(), key=_entry_sort_key)
+        # Keep the newest item inside each priority band. This matters when a
+        # long task accumulates more pinned feedback than the prompt window can
+        # render: the latest correction must not be displaced by an old one.
+        pinned = sorted(stack.get_pinned_entries(), key=lambda entry: entry.ts, reverse=True)
+        pinned.sort(key=_entry_priority_rank)
         return pinned[: self.recent_entry_limit]
 
     def _select_recent(self, stack: TaskMemoryStack, *, exclude_ids: set[str]) -> list[StackMemoryEntry]:
-        active = [entry for entry in stack.get_active_entries() if entry.id not in exclude_ids]
+        active = [entry for entry in stack.get_active_entries() if entry.id not in exclude_ids and entry.status != "pinned" and entry.priority != "critical"]
         return active[-self.recent_entry_limit :]
 
     def _format_entries(self, entries: Iterable[StackMemoryEntry]) -> list[str]:
@@ -119,13 +129,21 @@ class PromptContextBuilder:
         return f"- id={entry.id} ({', '.join(parts)}): {content}"
 
     def _clip_lines(self, lines: list[str]) -> str:
+        full_context = "\n".join(lines)
+        if len(full_context) <= self.max_chars:
+            return full_context
+
+        closing = "</sp-task-context>"
+        marker = "...<sp-task-context-truncated>"
+        body_lines = lines[:-1] if lines and lines[-1] == closing else lines
+        reserved = len(marker) + len(closing) + 2
         output: list[str] = []
         total = 0
-        for line in lines:
+        for line in body_lines:
             additional = len(line) + 1
-            if total + additional > self.max_chars:
-                output.append("...<sp-task-context-truncated>")
+            if total + additional + reserved > self.max_chars:
                 break
             output.append(line)
             total += additional
-        return "\n".join(output)
+        output.extend([marker, closing])
+        return "\n".join(output)[: self.max_chars]

@@ -56,9 +56,25 @@ def _get_default_assistant() -> AssistantResponse:
     )
 
 
+def _get_stackplanner_assistant() -> AssistantResponse:
+    """Return the built-in StackPlanner orchestration assistant."""
+    now = datetime.now(UTC).isoformat()
+    return AssistantResponse(
+        assistant_id="stackplanner",
+        graph_id="stackplanner",
+        name="StackPlanner 2.0",
+        config={},
+        metadata={"created_by": "system", "runtime": "deerflow"},
+        description="StackPlanner CentralAgent orchestration on DeerFlow 2.0",
+        created_at=now,
+        updated_at=now,
+        version=1,
+    )
+
+
 def _list_assistants() -> list[AssistantResponse]:
     """List all available assistants from config."""
-    assistants = [_get_default_assistant()]
+    assistants = [_get_default_assistant(), _get_stackplanner_assistant()]
 
     # Also include custom agents from config.yaml agents directory
     try:
@@ -124,7 +140,7 @@ async def get_assistant_graph(assistant_id: str) -> dict:
         raise HTTPException(status_code=404, detail=f"Assistant {assistant_id} not found")
 
     return {
-        "graph_id": "lead_agent",
+        "graph_id": "stackplanner" if assistant_id == "stackplanner" else "lead_agent",
         "nodes": [],
         "edges": [],
     }
@@ -141,7 +157,7 @@ async def get_assistant_schemas(assistant_id: str) -> dict:
         raise HTTPException(status_code=404, detail=f"Assistant {assistant_id} not found")
 
     return {
-        "graph_id": "lead_agent",
+        "graph_id": "stackplanner" if assistant_id == "stackplanner" else "lead_agent",
         "input_schema": {},
         "output_schema": {},
         "state_schema": {},

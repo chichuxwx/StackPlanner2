@@ -7,10 +7,13 @@ test.describe("Landing page", () => {
     await page.goto("/");
 
     await expect(
-      page.locator("header").first().getByText("DeerFlow", { exact: true }),
+      page
+        .locator("header")
+        .first()
+        .getByText("StackPlanner 2.0", { exact: true }),
     ).toBeVisible();
     await expect(page.locator("h1")).toHaveCount(1);
-    await expect(page.locator("h1")).toContainText("DeerFlow");
+    await expect(page.locator("h1")).toContainText("StackPlanner 2.0");
 
     // "Get Started" call-to-action button in hero
     await expect(

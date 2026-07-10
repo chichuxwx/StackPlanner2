@@ -95,6 +95,7 @@ export default function NewAgentPage() {
 
   const { thread, sendMessage } = useThreadStream({
     threadId: undefined,
+    assistantId: "lead_agent",
     context: {
       mode: "flash",
       is_bootstrap: true,
