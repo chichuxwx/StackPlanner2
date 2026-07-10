@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 
+import { StackPlannerLogo } from "@/components/brand/stack-planner-logo";
 import { Button } from "@/components/ui/button";
 import { FlickeringGrid } from "@/components/ui/flickering-grid";
 import { Input } from "@/components/ui/input";
@@ -197,9 +198,9 @@ export default function LoginPage() {
   const actualTheme = theme === "system" ? resolvedTheme : theme;
 
   return (
-    <div className="bg-background relative flex min-h-screen items-center justify-center overflow-x-hidden overflow-y-auto">
+    <div className="bg-background relative flex min-h-screen items-center justify-center overflow-y-auto overflow-x-hidden">
       <FlickeringGrid
-        className="absolute inset-0 z-0 mask-[url(/images/deer.svg)] mask-size-[100vw] mask-center mask-no-repeat md:mask-size-[72vh]"
+        className="mask-[url(/images/stackplanner-mark.svg)] mask-size-[88vw] mask-center mask-no-repeat md:mask-size-[62vh] absolute inset-0 z-0"
         squareSize={4}
         gridGap={4}
         color={actualTheme === "dark" ? "white" : "black"}
@@ -208,7 +209,9 @@ export default function LoginPage() {
       />
       <div className="border-border/20 bg-background/5 w-full max-w-md space-y-6 rounded-3xl border p-8 backdrop-blur-sm">
         <div className="text-center">
-          <h1 className="text-foreground font-serif text-3xl">DeerFlow</h1>
+          <h1 className="text-foreground flex justify-center text-3xl">
+            <StackPlannerLogo markClassName="size-9" />
+          </h1>
           <p className="text-muted-foreground mt-2">
             {isLogin ? t.login.signInTitle : t.login.createAccountTitle}
           </p>

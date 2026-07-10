@@ -4,12 +4,18 @@ import "@/styles/globals.css";
 import { type Metadata } from "next";
 
 import { ThemeProvider } from "@/components/theme-provider";
+import {
+  PRODUCT_DESCRIPTION,
+  PRODUCT_MARK_PATH,
+  PRODUCT_NAME,
+} from "@/core/branding";
 import { I18nProvider } from "@/core/i18n/context";
 import { detectLocaleServer } from "@/core/i18n/server";
 
 export const metadata: Metadata = {
-  title: "DeerFlow",
-  description: "A LangChain-based framework for building super agents.",
+  title: PRODUCT_NAME,
+  description: PRODUCT_DESCRIPTION,
+  icons: [{ rel: "icon", url: PRODUCT_MARK_PATH, type: "image/svg+xml" }],
 };
 
 export default async function RootLayout({
