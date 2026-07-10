@@ -3,7 +3,7 @@
 import json
 
 from deerflow.sp.memory import normalize_memory_recall_result
-from deerflow.sp.subagents import SPSubagentResult, SPSubagentStatus
+from deerflow.sp.subagents import DR2SubagentExecutorAdapter, SPSubagentResult, SPSubagentStatus, SPSubagentTask
 
 
 def test_normalize_memory_recall_result_accepts_plain_text():
@@ -39,3 +39,34 @@ def test_normalize_memory_recall_result_bounds_items_and_content():
     assert result.items[0].content.endswith("...<truncated>")
     assert result.metadata["truncated_item_count"] == 3
     assert result.dry_run_promotion is True
+
+
+def test_fenced_dr2_memory_recaller_result_keeps_items_end_to_end():
+    class Executor:
+        def execute(self, task: str):
+            return type(
+                "Result",
+                (),
+                {
+                    "status": "completed",
+                    "result": '```json\n{"summary":"Prior preference","items":[{"content":"Test every unit","memory_id":"mem-1"}]}\n```',
+                    "task_id": "memory-task",
+                    "error": None,
+                    "stop_reason": None,
+                },
+            )()
+
+    task = SPSubagentTask(
+        action_id="act-memory",
+        subagent_type="memory_recaller",
+        task="Recall testing preferences",
+        description="Need prior preferences",
+    )
+    adapted = DR2SubagentExecutorAdapter(lambda _: Executor()).execute(task)
+
+    normalized = normalize_memory_recall_result("testing preferences", adapted)
+
+    assert normalized.summary == "Prior preference"
+    assert len(normalized.items) == 1
+    assert normalized.items[0].content == "Test every unit"
+    assert normalized.items[0].memory_id == "mem-1"

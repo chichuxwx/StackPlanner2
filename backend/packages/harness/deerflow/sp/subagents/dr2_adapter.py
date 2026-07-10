@@ -96,11 +96,12 @@ def normalize_dr2_subagent_result(result: Any, *, task: SPSubagentTask | None = 
         status = SPSubagentStatus.FAILED
     raw_result = getattr(result, "result", None)
     payload = _parse_result_payload(raw_result)
+    is_memory_recaller = task is not None and task.subagent_type == "memory_recaller"
     artifact_content = getattr(result, "artifact_content", None)
     artifact_type = getattr(result, "artifact_type", None)
     artifact_metadata = getattr(result, "artifact_metadata", None)
     summary = raw_result
-    if payload is not None and any(key in payload for key in ("summary", "artifact_content", "artifact_type", "artifact_metadata")):
+    if not is_memory_recaller and payload is not None and any(key in payload for key in ("summary", "artifact_content", "artifact_type", "artifact_metadata")):
         summary = payload.get("summary") or payload.get("result")
         artifact_content = artifact_content if artifact_content is not None else payload.get("artifact_content")
         artifact_type = artifact_type or payload.get("artifact_type")
@@ -110,16 +111,20 @@ def normalize_dr2_subagent_result(result: Any, *, task: SPSubagentTask | None = 
         if isinstance(payload_metadata, dict):
             artifact_metadata = {**payload_metadata, **artifact_metadata}
 
-    if artifact_content is None and isinstance(raw_result, str) and len(raw_result) > DEFAULT_LARGE_RESULT_THRESHOLD and status == SPSubagentStatus.COMPLETED:
+    if artifact_content is None and isinstance(raw_result, str) and len(raw_result) > DEFAULT_LARGE_RESULT_THRESHOLD and status == SPSubagentStatus.COMPLETED and not is_memory_recaller:
         artifact_content = raw_result
         artifact_type = artifact_type or _default_artifact_type(task.subagent_type if task is not None else None)
 
     if not isinstance(artifact_metadata, dict):
         artifact_metadata = {}
 
+    normalized_result = _compact_result(summary)
+    if is_memory_recaller:
+        normalized_result = json.dumps(payload, ensure_ascii=False, separators=(",", ":")) if payload is not None else raw_result
+
     return SPSubagentResult(
         status=status,
-        result=_compact_result(summary),
+        result=normalized_result,
         error=getattr(result, "error", None),
         stop_reason=getattr(result, "stop_reason", None),
         task_id=getattr(result, "task_id", None),

@@ -383,10 +383,29 @@ class MemoryCandidateExtractor:
 
     @staticmethod
     def _dedupe(candidates: list[MemoryCandidate]) -> list[MemoryCandidate]:
-        by_id: dict[str, MemoryCandidate] = {}
-        order: list[str] = []
+        by_semantic_key: dict[tuple[str, str, str], MemoryCandidate] = {}
+        order: list[tuple[str, str, str]] = []
         for candidate in candidates:
-            if candidate.candidate_id not in by_id:
-                order.append(candidate.candidate_id)
-            by_id[candidate.candidate_id] = candidate
-        return [by_id[candidate_id] for candidate_id in order]
+            normalized_content = " ".join(candidate.content.casefold().split())
+            semantic_key = (candidate.kind, candidate.scope, normalized_content)
+            existing = by_semantic_key.get(semantic_key)
+            if existing is None:
+                order.append(semantic_key)
+                by_semantic_key[semantic_key] = candidate
+                continue
+
+            existing.source_entry_ids = list(dict.fromkeys([*existing.source_entry_ids, *candidate.source_entry_ids]))
+            existing.source_artifact_ids = list(dict.fromkeys([*existing.source_artifact_ids, *candidate.source_artifact_ids]))
+            existing.source_event_ids = list(dict.fromkeys([*existing.source_event_ids, *candidate.source_event_ids]))
+            existing.confidence = max(existing.confidence, candidate.confidence)
+            existing.metadata = {
+                **existing.metadata,
+                **candidate.metadata,
+                "duplicate_signal_count": int(existing.metadata.get("duplicate_signal_count", 1)) + 1,
+            }
+            existing.candidate_id = _stable_id(
+                existing.kind,
+                existing.content,
+                [*existing.source_entry_ids, *existing.source_artifact_ids, *existing.source_event_ids],
+            )
+        return [by_semantic_key[key] for key in order]

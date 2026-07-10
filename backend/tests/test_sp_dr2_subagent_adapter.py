@@ -117,3 +117,17 @@ def test_adapter_preserves_timeout_status_and_observes_raw_result():
     assert result.status == SPSubagentStatus.TIMED_OUT
     assert result.error == "deadline"
     assert observed == [raw]
+
+
+def test_memory_recaller_keeps_full_recall_json_for_normalization():
+    recall_json = """```json
+{"summary":"Use phased tests.","items":[{"content":"Test each unit.","memory_id":"mem-1"}]}
+```"""
+    executor = FakeDR2Executor(FakeDR2Result(status="completed", result=recall_json, task_id="memory-task"))
+    task = _sp_task()
+    task.subagent_type = "memory_recaller"
+
+    result = DR2SubagentExecutorAdapter(lambda _: executor).execute(task)
+
+    assert result.result == '{"summary":"Use phased tests.","items":[{"content":"Test each unit.","memory_id":"mem-1"}]}'
+    assert result.artifact_content is None

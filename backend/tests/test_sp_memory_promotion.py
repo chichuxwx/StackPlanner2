@@ -107,6 +107,18 @@ def test_all_candidates_default_to_dry_run():
     assert all(candidate.dry_run for candidate in candidates)
 
 
+def test_repeated_stable_feedback_merges_provenance_into_one_candidate():
+    stack = TaskMemoryStack()
+    first = stack.append_feedback("以后默认用中文解释迁移风险")
+    second = stack.append_feedback("  以后默认用中文解释迁移风险  ")
+
+    candidates = MemoryCandidateExtractor().extract(stack)
+
+    assert len(candidates) == 1
+    assert candidates[0].source_entry_ids == [first.id, second.id]
+    assert candidates[0].metadata["duplicate_signal_count"] == 2
+
+
 def test_promotion_hook_is_dry_run_by_default_and_does_not_write():
     stack = TaskMemoryStack()
     stack.append_feedback("以后默认用中文解释迁移风险")

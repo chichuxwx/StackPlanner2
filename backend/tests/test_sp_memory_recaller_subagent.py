@@ -25,3 +25,33 @@ def test_memory_recaller_is_read_only_and_cannot_delegate_or_write_files():
     assert "write_file" in config.disallowed_tools
     assert "Do not write, update, promote, delete, or mutate long-term memory." in config.system_prompt
     assert "Return compact JSON only" in config.system_prompt
+
+
+def test_memory_recaller_runtime_chain_includes_read_only_dynamic_context():
+    from deerflow.agents.middlewares.dynamic_context_middleware import DynamicContextMiddleware
+    from deerflow.agents.middlewares.memory_middleware import MemoryMiddleware
+    from deerflow.agents.middlewares.tool_error_handling_middleware import build_subagent_runtime_middlewares
+    from deerflow.config.app_config import AppConfig
+
+    app_config = AppConfig.model_validate({"sandbox": {"use": "deerflow.sandbox.local:LocalSandboxProvider"}})
+    middlewares = build_subagent_runtime_middlewares(
+        app_config=app_config,
+        agent_name="memory_recaller",
+    )
+
+    assert sum(isinstance(middleware, DynamicContextMiddleware) for middleware in middlewares) == 1
+    assert not any(isinstance(middleware, MemoryMiddleware) for middleware in middlewares)
+
+
+def test_other_subagents_do_not_receive_long_term_memory_implicitly():
+    from deerflow.agents.middlewares.dynamic_context_middleware import DynamicContextMiddleware
+    from deerflow.agents.middlewares.tool_error_handling_middleware import build_subagent_runtime_middlewares
+    from deerflow.config.app_config import AppConfig
+
+    app_config = AppConfig.model_validate({"sandbox": {"use": "deerflow.sandbox.local:LocalSandboxProvider"}})
+    middlewares = build_subagent_runtime_middlewares(
+        app_config=app_config,
+        agent_name="researcher",
+    )
+
+    assert not any(isinstance(middleware, DynamicContextMiddleware) for middleware in middlewares)
