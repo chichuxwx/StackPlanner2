@@ -265,7 +265,7 @@ async def task_tool(
 
     # Get subagent configuration
     config = get_subagent_config(subagent_type, app_config=runtime_app_config) if runtime_app_config is not None else get_subagent_config(subagent_type)
-    if config is None:
+    if config is None or subagent_type not in available_subagent_names:
         available = ", ".join(available_subagent_names)
         error = f"Unknown subagent type '{subagent_type}'. Available: {available}"
         return _task_result_command(

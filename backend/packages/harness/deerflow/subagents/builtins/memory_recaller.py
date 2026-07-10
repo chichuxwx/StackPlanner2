@@ -50,4 +50,5 @@ Return compact JSON only:
     skills=None,
     model="inherit",
     max_turns=20,
+    internal=True,
 )

@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
 
@@ -92,7 +92,16 @@ class SPArtifactAdapter:
         outputs_path.mkdir(parents=True, exist_ok=True)
 
         effective_version = version or self._next_version(state, artifact_type)
-        artifact_id = f"spart_{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:16]}"
+        identity_payload = json.dumps(
+            {
+                "artifact_type": artifact_type,
+                "content_hash": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+                "parent_artifact_ids": parent_artifact_ids or [],
+                "version": effective_version,
+            },
+            sort_keys=True,
+        )
+        artifact_id = f"spart_{hashlib.sha256(identity_payload.encode('utf-8')).hexdigest()[:16]}"
         extension = _extension_for_artifact(artifact_type, content)
         name = filename_hint or f"{_safe_slug(artifact_type)}-v{effective_version}-{artifact_id}{extension}"
         relative_path = Path("sp") / _safe_slug(artifact_type) / _safe_slug(name)
@@ -162,6 +171,54 @@ class SPArtifactAdapter:
             combined_update = _merge_state_updates(combined_update, result.state_update)
         return combined_update
 
+    def register_existing_artifact(
+        self,
+        virtual_path: str,
+        *,
+        artifact_type: str,
+        state: ThreadState | dict[str, Any],
+        thread_id: str | None = None,
+        run_id: str | None = None,
+        created_by: str = "system",
+        stage: str | None = None,
+        source_entry_id: str | None = None,
+        summary: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SPArtifactWriteResult:
+        """Register a subagent-created DR2 workspace/output file without copying its body."""
+        normalized_path = _normalize_existing_virtual_path(virtual_path)
+        effective_version = self._next_version(state, artifact_type)
+        identity_payload = json.dumps(
+            {
+                "artifact_type": artifact_type,
+                "virtual_path": normalized_path,
+                "version": effective_version,
+            },
+            sort_keys=True,
+        )
+        artifact_metadata = SPArtifactMetadata(
+            artifact_id=f"spart_{hashlib.sha256(identity_payload.encode('utf-8')).hexdigest()[:16]}",
+            type=artifact_type,
+            version=effective_version,
+            created_by=created_by,
+            thread_id=thread_id,
+            run_id=run_id,
+            stage=stage,
+            source_entry_id=source_entry_id,
+            summary=_summarize(summary or f"Generated artifact: {normalized_path}"),
+            virtual_path=normalized_path,
+            artifact_url=_artifact_url(thread_id, normalized_path) if normalized_path.startswith(f"{OUTPUTS_VIRTUAL_PREFIX}/") else None,
+            content_hash="",
+            metadata={"registered_existing_file": True, **(metadata or {})},
+        )
+        refs = self._merge_ref(state.get("sp_current_artifact_refs"), artifact_metadata)
+        state_update: dict[str, Any] = {"sp_current_artifact_refs": refs}
+        if normalized_path.startswith(f"{OUTPUTS_VIRTUAL_PREFIX}/"):
+            state_update["artifacts"] = [normalized_path]
+        if artifact_type in {"report", "report_revision", "final_report"}:
+            state_update["sp_current_report_version"] = str(effective_version)
+        return SPArtifactWriteResult(metadata=artifact_metadata, state_update=state_update)
+
     def _outputs_path(self, state: ThreadState | dict[str, Any], *, thread_id: str | None) -> Path:
         thread_data = state.get("thread_data") or {}
         outputs_path = thread_data.get("outputs_path")
@@ -173,23 +230,22 @@ class SPArtifactAdapter:
 
     def _next_version(self, state: ThreadState | dict[str, Any], artifact_type: str) -> int:
         refs = state.get("sp_current_artifact_refs") or {}
-        current = refs.get(artifact_type)
-        if isinstance(current, dict) and isinstance(current.get("version"), int):
-            return current["version"] + 1
+        version_types = _version_family(artifact_type)
+        current_versions = [value.get("version") for key, value in refs.items() if key in version_types and isinstance(value, dict) and isinstance(value.get("version"), int)]
         history = refs.get("_history")
+        history_versions: list[int] = []
         if isinstance(history, list):
-            versions = [item.get("version") for item in history if isinstance(item, dict) and item.get("type") == artifact_type]
-            numeric_versions = [version for version in versions if isinstance(version, int)]
-            if numeric_versions:
-                return max(numeric_versions) + 1
-        return 1
+            history_versions = [item["version"] for item in history if isinstance(item, dict) and item.get("type") in version_types and isinstance(item.get("version"), int)]
+        versions = [*current_versions, *history_versions]
+        return max(versions, default=0) + 1
 
     def _merge_ref(self, existing: Any, artifact_metadata: SPArtifactMetadata) -> dict[str, Any]:
         refs = dict(existing) if isinstance(existing, dict) else {}
         ref = artifact_metadata.to_ref()
         refs[artifact_metadata.type] = ref
         history = [item for item in refs.get("_history", []) if isinstance(item, dict)]
-        history.append(ref)
+        if not any(item.get("artifact_id") == ref["artifact_id"] and item.get("version") == ref["version"] for item in history):
+            history.append(ref)
         refs["_history"] = history[-50:]
         return refs
 
@@ -217,6 +273,23 @@ def _stage_for_legacy_field(field_name: str) -> str | None:
         "original_report": "reporting",
         "final_report": "revision",
     }.get(field_name)
+
+
+def _version_family(artifact_type: str) -> set[str]:
+    if artifact_type in {"report", "report_revision", "final_report"}:
+        return {"report", "report_revision", "final_report"}
+    return {artifact_type}
+
+
+def _normalize_existing_virtual_path(value: str) -> str:
+    raw = str(value or "").strip().replace("\\", "/")
+    allowed_prefixes = ("/mnt/user-data/outputs/", "/mnt/user-data/workspace/")
+    if not raw.startswith(allowed_prefixes):
+        raise ValueError("SP existing artifact path must be under /mnt/user-data/outputs or /mnt/user-data/workspace")
+    path = PurePosixPath(raw)
+    if ".." in path.parts:
+        raise ValueError("SP existing artifact path cannot contain '..'")
+    return path.as_posix()
 
 
 def _merge_state_updates(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:

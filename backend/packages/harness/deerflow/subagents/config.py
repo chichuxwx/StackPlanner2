@@ -38,6 +38,10 @@ class SubagentConfig:
     model: str = "inherit"
     max_turns: int = 50
     timeout_seconds: int = 900
+    # Internal specialists are addressable by orchestration code through the
+    # registry but are not advertised to, or callable from, the default lead
+    # agent's generic task tool.
+    internal: bool = False
 
 
 def _default_model_name(app_config: "AppConfig") -> str:

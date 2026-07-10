@@ -13,6 +13,7 @@ def test_memory_recaller_is_registered_as_builtin_subagent():
     assert config is not None
     assert config.name == "memory_recaller"
     assert config.max_turns == 20
+    assert config.internal is True
 
 
 def test_memory_recaller_is_read_only_and_cannot_delegate_or_write_files():

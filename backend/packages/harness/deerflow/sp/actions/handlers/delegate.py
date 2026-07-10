@@ -11,6 +11,17 @@ from deerflow.sp.artifacts import SPArtifactAdapter
 from deerflow.sp.memory import StackMemoryEntry
 from deerflow.sp.subagents import SPSubagentExecutorProtocol, SPSubagentResult, SPSubagentTask
 
+OBSERVE_SUMMARY_MAX_CHARS = 700
+LARGE_RESULT_ARTIFACT_THRESHOLD = 1200
+
+
+def _compact_result(value: str | None, *, fallback: str) -> str:
+    text = " ".join((value or fallback).split())
+    if len(text) <= OBSERVE_SUMMARY_MAX_CHARS:
+        return text
+    suffix = "...<truncated>"
+    return f"{text[: OBSERVE_SUMMARY_MAX_CHARS - len(suffix)]}{suffix}"
+
 
 def _build_context_refs(context: HandlerContext) -> dict[str, Any]:
     refs: dict[str, Any] = {}
@@ -81,10 +92,13 @@ class DelegateHandler:
         artifact_refs: dict[str, Any] = {}
         artifact_events: list[dict[str, Any]] = []
         result_ref = result.task_id
-        if result.artifact_content is not None:
+        artifact_content = result.artifact_content
+        if artifact_content is None and isinstance(result.result, str) and len(result.result) > LARGE_RESULT_ARTIFACT_THRESHOLD:
+            artifact_content = result.result
+        if artifact_content is not None:
             artifact_type = result.artifact_type or _default_artifact_type(str(action.target_agent))
             artifact = self._artifact_adapter.write_text_artifact(
-                result.artifact_content,
+                artifact_content,
                 artifact_type=artifact_type,
                 state=context.state,
                 thread_id=context.thread_id,
@@ -92,7 +106,7 @@ class DelegateHandler:
                 created_by=str(action.target_agent),
                 stage=action.stage,
                 source_entry_id=delegate_entry.id,
-                summary=result.result,
+                summary=_compact_result(result.result, fallback="Subagent artifact created"),
                 metadata={"delegate_action_id": action.action_id, **result.artifact_metadata},
             )
             state_update.update(artifact.state_update)
@@ -108,8 +122,45 @@ class DelegateHandler:
                     virtual_path=artifact.metadata.virtual_path,
                 )
             )
+        else:
+            created_paths = result.artifact_metadata.get("created_paths")
+            if isinstance(created_paths, list):
+                artifact_state = dict(context.state)
+                registered_paths: list[str] = []
+                for created_path in created_paths:
+                    try:
+                        artifact = self._artifact_adapter.register_existing_artifact(
+                            str(created_path),
+                            artifact_type=result.artifact_type or _default_artifact_type(str(action.target_agent)),
+                            state={**artifact_state, **state_update},
+                            thread_id=context.thread_id,
+                            run_id=context.run_id,
+                            created_by=str(action.target_agent),
+                            stage=action.stage,
+                            source_entry_id=delegate_entry.id,
+                            summary=_compact_result(result.result, fallback="Subagent artifact created"),
+                            metadata={"delegate_action_id": action.action_id},
+                        )
+                    except ValueError:
+                        continue
+                    state_update = _merge_artifact_state_updates(state_update, artifact.state_update)
+                    artifact_refs = state_update.get("sp_current_artifact_refs", {})
+                    result_ref = artifact.metadata.artifact_id
+                    registered_paths.append(artifact.metadata.virtual_path)
+                    artifact_events.append(
+                        make_sp_event(
+                            "sp.artifact.registered",
+                            action_id=action.action_id,
+                            run_id=context.run_id,
+                            artifact_id=artifact.metadata.artifact_id,
+                            artifact_type=artifact.metadata.type,
+                            virtual_path=artifact.metadata.virtual_path,
+                        )
+                    )
+                if registered_paths:
+                    result.artifact_metadata["created_paths"] = registered_paths
 
-        observe_content = result.result or "Subagent completed without textual result"
+        observe_content = _compact_result(result.result, fallback="Subagent completed without textual result")
         observe_entry = context.stack.append_observe(
             observe_content,
             actor=str(action.target_agent),
@@ -181,3 +232,10 @@ def _default_artifact_type(target_agent: str) -> str:
         "coder": "generated_file",
         "perception": "generated_file",
     }.get(target_agent, "generated_file")
+
+
+def _merge_artifact_state_updates(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+    merged = {**existing, **new}
+    if "artifacts" in existing or "artifacts" in new:
+        merged["artifacts"] = list(dict.fromkeys([*existing.get("artifacts", []), *new.get("artifacts", [])]))
+    return merged

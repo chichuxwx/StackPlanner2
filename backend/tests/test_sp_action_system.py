@@ -314,6 +314,84 @@ def test_delegate_handler_records_failure_as_recoverable_error():
     assert any(event["event_type"] == "sp.delegate.failed" for event in result.run_events)
 
 
+def test_delegate_handler_defensively_externalizes_large_unstructured_result(tmp_path):
+    large_result = "Detailed evidence. " * 200
+    executor = FakeSubagentExecutor(
+        SPSubagentResult(
+            status=SPSubagentStatus.COMPLETED,
+            result=large_result,
+            task_id="task-large-unstructured",
+        )
+    )
+    action = _action(
+        ActionType.DELEGATE,
+        action_id="act-large-unstructured",
+        target_agent="researcher",
+        task="Research details",
+        stage="research",
+    )
+
+    result = build_default_action_router(delegate_executor=executor).execute(
+        action,
+        state=_thread_state_with_outputs(tmp_path),
+        thread_id="thread-1",
+        run_id="run-1",
+    )
+
+    stack = TaskMemoryStack.from_dict(result.state_update["sp_task_memory"])
+    observation = stack.entries[-1]
+    artifact_ref = result.state_update["sp_current_artifact_refs"]["research_observation"]
+    artifact_path = tmp_path / "threads" / "thread-1" / "user-data" / "outputs" / artifact_ref["virtual_path"].removeprefix("/mnt/user-data/outputs/")
+
+    assert result.next_step == "continue"
+    assert len(observation.content) == 700
+    assert observation.content.endswith("...<truncated>")
+    assert observation.result_ref == artifact_ref["artifact_id"]
+    assert artifact_path.read_text(encoding="utf-8") == large_result
+    assert large_result not in str(result.state_update["sp_task_memory"])
+
+
+def test_delegate_handler_registers_coder_created_output_paths_as_artifacts(tmp_path):
+    executor = FakeSubagentExecutor(
+        SPSubagentResult(
+            status=SPSubagentStatus.COMPLETED,
+            result="Implemented and tested the requested module.",
+            task_id="task-coder-output",
+            artifact_type="generated_file",
+            artifact_metadata={
+                "created_paths": [
+                    "/mnt/user-data/outputs/generated/module.py",
+                    "/mnt/user-data/outputs/generated/test_module.py",
+                ]
+            },
+        )
+    )
+    action = _action(
+        ActionType.DELEGATE,
+        action_id="act-coder-output",
+        target_agent="coder",
+        task="Implement module",
+        stage="implementation",
+    )
+
+    result = build_default_action_router(delegate_executor=executor).execute(
+        action,
+        state=_thread_state_with_outputs(tmp_path),
+        thread_id="thread-1",
+        run_id="run-1",
+    )
+
+    stack = TaskMemoryStack.from_dict(result.state_update["sp_task_memory"])
+    history = result.state_update["sp_current_artifact_refs"]["_history"]
+    assert result.state_update["artifacts"] == [
+        "/mnt/user-data/outputs/generated/module.py",
+        "/mnt/user-data/outputs/generated/test_module.py",
+    ]
+    assert [ref["version"] for ref in history] == [1, 2]
+    assert stack.entries[-1].result_ref == history[-1]["artifact_id"]
+    assert sum(event["event_type"] == "sp.artifact.registered" for event in result.run_events) == 2
+
+
 def test_recall_memory_handler_calls_memory_recaller_and_records_dry_run_result():
     executor = FakeSubagentExecutor(
         SPSubagentResult(

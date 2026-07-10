@@ -42,6 +42,7 @@ class SPSubagentResult:
     artifact_content: Any | None = None
     artifact_type: str | None = None
     artifact_metadata: dict[str, Any] = field(default_factory=dict)
+    token_usage_records: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def is_success(self) -> bool:

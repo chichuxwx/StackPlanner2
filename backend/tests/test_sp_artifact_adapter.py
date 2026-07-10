@@ -56,6 +56,43 @@ def test_write_text_artifact_versions_current_ref_and_keeps_history(tmp_path):
     assert [item["version"] for item in refs["_history"] if item["type"] == "outline"] == [1, 2]
 
 
+def test_report_and_report_revision_share_one_version_lineage(tmp_path):
+    adapter = SPArtifactAdapter()
+    state = _state(tmp_path)
+    report = adapter.write_text_artifact("Report v1", artifact_type="report", state=state, thread_id="thread-1")
+    revision = adapter.write_text_artifact(
+        "Report v2",
+        artifact_type="report_revision",
+        state={**state, **report.state_update},
+        thread_id="thread-1",
+        parent_artifact_ids=[report.metadata.artifact_id],
+    )
+
+    refs = revision.state_update["sp_current_artifact_refs"]
+    assert report.metadata.version == 1
+    assert revision.metadata.version == 2
+    assert revision.metadata.parent_artifact_ids == [report.metadata.artifact_id]
+    assert revision.state_update["sp_current_report_version"] == "2"
+    assert report.metadata.artifact_id != revision.metadata.artifact_id
+    assert [item["version"] for item in refs["_history"] if item["type"] in {"report", "report_revision"}] == [1, 2]
+
+
+def test_same_report_content_in_two_versions_has_distinct_artifact_ids(tmp_path):
+    adapter = SPArtifactAdapter()
+    state = _state(tmp_path)
+    first = adapter.write_text_artifact("Same body", artifact_type="report", state=state, thread_id="thread-1")
+    second = adapter.write_text_artifact(
+        "Same body",
+        artifact_type="report",
+        state={**state, **first.state_update},
+        thread_id="thread-1",
+    )
+
+    assert first.metadata.version == 1
+    assert second.metadata.version == 2
+    assert first.metadata.artifact_id != second.metadata.artifact_id
+
+
 def test_migrate_legacy_midterm_state_externalizes_large_fields(tmp_path):
     adapter = SPArtifactAdapter()
     update = adapter.migrate_legacy_midterm_state(
@@ -110,3 +147,34 @@ def test_bind_feedback_updates_current_ref_and_history():
 def test_write_text_artifact_requires_dr2_thread_context_when_no_outputs_path():
     with pytest.raises(ValueError, match="thread_data.outputs_path or thread_id"):
         SPArtifactAdapter().write_text_artifact("body", artifact_type="report", state={})
+
+
+def test_register_existing_output_file_creates_ref_without_copying_body(tmp_path):
+    adapter = SPArtifactAdapter()
+    result = adapter.register_existing_artifact(
+        "/mnt/user-data/outputs/generated/app.py",
+        artifact_type="generated_file",
+        state=_state(tmp_path),
+        thread_id="thread-1",
+        run_id="run-1",
+        created_by="coder",
+    )
+
+    ref = result.state_update["sp_current_artifact_refs"]["generated_file"]
+    assert ref["virtual_path"] == "/mnt/user-data/outputs/generated/app.py"
+    assert ref["artifact_url"] == "/api/threads/thread-1/artifacts/mnt/user-data/outputs/generated/app.py"
+    assert ref["metadata"]["registered_existing_file"] is True
+    assert result.state_update["artifacts"] == ["/mnt/user-data/outputs/generated/app.py"]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/tmp/not-thread-scoped.txt",
+        "/mnt/user-data/outputs/../uploads/secret.txt",
+        "relative/file.txt",
+    ],
+)
+def test_register_existing_artifact_rejects_paths_outside_dr2_workspace(path):
+    with pytest.raises(ValueError):
+        SPArtifactAdapter().register_existing_artifact(path, artifact_type="generated_file", state={})
