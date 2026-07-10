@@ -47,7 +47,7 @@ Return compact JSON only:
 """,
     tools=None,
     disallowed_tools=["task", "ask_clarification", "present_files", "bash", "write_file", "str_replace"],
-    skills=None,
+    skills=[],
     model="inherit",
     max_turns=20,
     internal=True,

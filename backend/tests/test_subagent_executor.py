@@ -371,6 +371,71 @@ class TestAgentConstruction:
         assert "Use demo skill" in messages[0].content
 
     @pytest.mark.anyio
+    async def test_load_skills_uses_user_scoped_storage_when_user_id_is_present(
+        self,
+        classes,
+        base_config,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        SubagentExecutor = classes["SubagentExecutor"]
+        app_config = SimpleNamespace(models=[SimpleNamespace(name="default-model")])
+        captured: dict[str, object] = {}
+
+        def fake_user_storage(user_id, *, app_config=None):
+            captured["user_id"] = user_id
+            captured["app_config"] = app_config
+            return SimpleNamespace(load_skills=lambda *, enabled_only: [SimpleNamespace(name="user-skill")])
+
+        def fail_global_storage(**kwargs):
+            raise AssertionError("user-scoped runs must not read global custom Skill storage")
+
+        monkeypatch.setattr(sys.modules["deerflow.skills.storage"], "get_or_new_user_skill_storage", fake_user_storage, raising=False)
+        monkeypatch.setattr(sys.modules["deerflow.skills.storage"], "get_or_new_skill_storage", fail_global_storage)
+        executor = SubagentExecutor(
+            config=base_config,
+            tools=[],
+            app_config=app_config,
+            thread_id="test-thread",
+            user_id="user-1",
+            user_scoped_skills=True,
+        )
+
+        skills = await executor._load_skills()
+
+        assert [skill.name for skill in skills] == ["user-skill"]
+        assert captured == {"user_id": "user-1", "app_config": app_config}
+
+    @pytest.mark.anyio
+    async def test_user_id_keeps_existing_global_skill_path_without_sp_opt_in(
+        self,
+        classes,
+        base_config,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        SubagentExecutor = classes["SubagentExecutor"]
+        calls: list[str] = []
+
+        def fake_global_storage(**kwargs):
+            calls.append("global")
+            return SimpleNamespace(load_skills=lambda *, enabled_only: [])
+
+        def fail_user_storage(*args, **kwargs):
+            raise AssertionError("default lead-agent subagents must keep the existing Skill path")
+
+        monkeypatch.setattr(sys.modules["deerflow.skills.storage"], "get_or_new_skill_storage", fake_global_storage)
+        monkeypatch.setattr(sys.modules["deerflow.skills.storage"], "get_or_new_user_skill_storage", fail_user_storage, raising=False)
+        executor = SubagentExecutor(
+            config=base_config,
+            tools=[],
+            thread_id="test-thread",
+            user_id="user-1",
+        )
+
+        await executor._load_skills()
+
+        assert calls == ["global"]
+
+    @pytest.mark.anyio
     async def test_build_initial_state_consolidates_system_prompt_and_skills(
         self,
         classes,

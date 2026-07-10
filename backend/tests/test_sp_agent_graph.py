@@ -5,10 +5,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from deerflow.sp import ActionRouter, ActionType, HandlerResult, SPAction, create_sp_agent_graph
+from deerflow.sp.central.runtime_context import SPCentralRuntimeContext
 from deerflow.sp.memory import TaskMemoryStack
 from deerflow.sp.runtime import make_sp_agent
 
@@ -268,6 +269,63 @@ def test_runtime_factory_builds_and_runs_stackplanner_graph(monkeypatch):
     assert result["title"] == "Smoke test"
 
 
+def test_runtime_factory_places_soul_in_system_and_memory_in_decision_input(monkeypatch):
+    class FakeAppConfig:
+        models = [SimpleNamespace(name="test-model")]
+        title = SimpleNamespace(enabled=False, max_chars=60)
+
+        @staticmethod
+        def get_model_config(name):
+            return SimpleNamespace(supports_thinking=False)
+
+    class FakeModel:
+        def __init__(self):
+            self.calls = []
+
+        def invoke(self, messages):
+            self.calls.append(messages)
+            return AIMessage(
+                content='{"action_id":"runtime-finish","action_type":"FINISH","reason":"done","task":"Done.","metadata":{"allow_without_artifact":true}}'
+            )
+
+    model = FakeModel()
+    captured = {}
+
+    def fake_runtime_context(app_config, *, agent_name=None, user_id=None):
+        captured.update({"agent_name": agent_name, "user_id": user_id})
+        return SPCentralRuntimeContext(
+            agent_name="sp-professor",
+            system_prompt_section="<soul>Use concise academic language.</soul>",
+            decision_context="<sp-long-term-context><memory>Prefer Chinese.</memory></sp-long-term-context>",
+            available_skill_names=frozenset({"stackplanner-long-task"}),
+        )
+
+    monkeypatch.setattr("deerflow.sp.runtime.create_chat_model", lambda **kwargs: model)
+    monkeypatch.setattr("deerflow.sp.runtime.build_tracing_callbacks", lambda: [])
+    monkeypatch.setattr("deerflow.sp.runtime.build_sp_central_runtime_context", fake_runtime_context)
+    graph = make_sp_agent(
+        {
+            "configurable": {"model_name": "test-model"},
+            "context": {"agent_name": "sp-professor", "user_id": "user-1"},
+        },
+        app_config=FakeAppConfig(),
+    )
+
+    graph.invoke(
+        {"messages": [HumanMessage(content="Prepare a report", id="user-1")]},
+        context={"thread_id": "thread-1", "run_id": "run-1"},
+    )
+
+    system_message, decision_message = model.calls[0]
+    assert isinstance(system_message, SystemMessage)
+    assert isinstance(decision_message, HumanMessage)
+    assert "Use concise academic language." in system_message.content
+    assert "Prefer Chinese." not in system_message.content
+    assert "Prefer Chinese." in decision_message.content
+    assert captured == {"agent_name": "sp-professor", "user_id": "user-1"}
+    assert graph.metadata["available_skills"] == ["stackplanner-long-task"]
+
+
 def test_duplicate_actions_still_consume_graph_loop_budget():
     repeated = _action(
         ActionType.THINK,
@@ -363,12 +421,13 @@ def test_graph_opts_into_task_memory_middleware_pruning():
         )
     )
 
+    journal = FakeJournal()
     result = graph.invoke(
         {
             "messages": [HumanMessage(content="Bound the context", id="user-1")],
             "sp_task_memory": stack.to_dict(),
         },
-        context={"thread_id": "thread-1", "run_id": "run-1"},
+        context={"thread_id": "thread-1", "run_id": "run-1", "__run_journal": journal},
     )
 
     restored = TaskMemoryStack.from_dict(result["sp_task_memory"])
@@ -376,3 +435,5 @@ def test_graph_opts_into_task_memory_middleware_pruning():
     assert len(active) == 25  # middleware limit plus the terminal FINISH entry
     assert next(entry for entry in restored.entries if entry.id == pinned.id).status == "pinned"
     assert any(entry.status == "pruned" for entry in restored.entries)
+    prune_event = next(event for event in journal.events if event["event_type"] == "sp.memory.pruned")
+    assert prune_event["content"]["payload"]["entry_count"] == 7

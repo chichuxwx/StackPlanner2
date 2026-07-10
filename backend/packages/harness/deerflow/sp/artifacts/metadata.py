@@ -117,6 +117,7 @@ class SPArtifactMetadata:
             "stage": self.stage,
             "source_entry_id": self.source_entry_id,
             "parent_artifact_ids": list(self.parent_artifact_ids),
+            "is_current": self.is_current,
             "summary": self.summary,
             "virtual_path": self.virtual_path,
             "artifact_url": self.artifact_url,

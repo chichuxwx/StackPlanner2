@@ -352,6 +352,8 @@ class SubagentExecutor:
         run_id: str | None = None,
         channel_user_id: str | None = None,
         deerflow_trace_id: str | None = None,
+        memory_agent_name: str | None = None,
+        user_scoped_skills: bool = False,
     ):
         """Initialize the executor.
 
@@ -376,6 +378,10 @@ class SubagentExecutor:
                 the same run as the lead agent.
             deerflow_trace_id: DeerFlow request-level correlation id propagated
                 from the parent run for Langfuse metadata correlation.
+            memory_agent_name: Optional DR2 agent-memory scope used by the
+                read-only StackPlanner memory_recaller.
+            user_scoped_skills: Load per-user custom Skills for this executor.
+                Disabled by default to preserve the existing lead-agent path.
         """
         self.config = config
         self.app_config = app_config
@@ -403,6 +409,8 @@ class SubagentExecutor:
         # must export the dispatching turn's id, not none at all.
         self.channel_user_id = channel_user_id
         self.deerflow_trace_id = deerflow_trace_id
+        self.memory_agent_name = memory_agent_name
+        self.user_scoped_skills = user_scoped_skills
 
         self._base_tools = _filter_tools(
             tools,
@@ -437,12 +445,17 @@ class SubagentExecutor:
 
         # Reuse shared middleware composition with lead agent. ``agent_name``
         # lets the builder resolve the per-agent token_budget override.
+        middleware_kwargs: dict[str, Any] = {
+            "app_config": app_config,
+            "model_name": self.model_name,
+            "lazy_init": True,
+            "deferred_setup": deferred_setup,
+            "agent_name": self.config.name,
+        }
+        if self.memory_agent_name is not None:
+            middleware_kwargs["memory_agent_name"] = self.memory_agent_name
         middlewares = build_subagent_runtime_middlewares(
-            app_config=app_config,
-            model_name=self.model_name,
-            lazy_init=True,
-            deferred_setup=deferred_setup,
-            agent_name=self.config.name,
+            **middleware_kwargs,
         )
         # Collect every guard middleware that exposes ``consume_stop_reason``
         # (TokenBudgetMiddleware, LoopDetectionMiddleware) so _aexecute can read
@@ -488,10 +501,15 @@ class SubagentExecutor:
             return []
 
         try:
-            from deerflow.skills.storage import get_or_new_skill_storage
-
             storage_kwargs = {"app_config": self.app_config} if self.app_config is not None else {}
-            storage = await asyncio.to_thread(get_or_new_skill_storage, **storage_kwargs)
+            if self.user_scoped_skills and self.user_id:
+                from deerflow.skills.storage import get_or_new_user_skill_storage
+
+                storage = await asyncio.to_thread(get_or_new_user_skill_storage, self.user_id, **storage_kwargs)
+            else:
+                from deerflow.skills.storage import get_or_new_skill_storage
+
+                storage = await asyncio.to_thread(get_or_new_skill_storage, **storage_kwargs)
             # Use asyncio.to_thread to avoid blocking the event loop (LangGraph ASGI requirement)
             all_skills = await asyncio.to_thread(storage.load_skills, enabled_only=True)
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} loaded {len(all_skills)} enabled skills from disk")

@@ -110,6 +110,7 @@ def _context_request(
     *,
     context_builder: PromptContextBuilder,
     system_prompt: str,
+    decision_context: str,
     iteration: int,
     thread_id: str | None,
     run_id: str | None,
@@ -125,6 +126,8 @@ def _context_request(
         artifact_refs=artifact_refs if isinstance(artifact_refs, Mapping) else None,
         report_version=state.get("sp_current_report_version"),
     )
+    if decision_context:
+        task_context = f"{decision_context}\n\n{task_context}"
     return CentralDecisionRequest(
         system_prompt=system_prompt,
         task_context=task_context,
@@ -220,6 +223,7 @@ def create_sp_agent_graph(
     *,
     decider: CentralActionDecider,
     system_prompt: str,
+    decision_context: str = "",
     context_builder: PromptContextBuilder | None = None,
     router: ActionRouter | None = None,
     executor_provider: SPExecutorProvider | None = None,
@@ -256,6 +260,12 @@ def create_sp_agent_graph(
     def prepare_context(state: ThreadState, runtime: Runtime) -> dict[str, Any]:
         thread_id = _runtime_id(runtime, "thread_id")
         run_id = _runtime_id(runtime, "run_id")
+        before_stack = TaskMemoryStack.from_dict(
+            state.get("sp_task_memory"),
+            thread_id=thread_id,
+            run_id=run_id,
+        )
+        before_status = {entry.id: entry.status for entry in before_stack.entries}
         normalized_memory = task_memory.before_agent(state, runtime) or {}
         stack = TaskMemoryStack.from_dict(
             normalized_memory.get("sp_task_memory", state.get("sp_task_memory")),
@@ -280,6 +290,20 @@ def create_sp_agent_graph(
         effective_state = {**state, **update}
         pending = effective_state.get("sp_pending_human_interaction")
         events = [make_sp_event("sp.loop.context_prepared", run_id=run_id)]
+        pruned_entry_ids = [
+            entry.id
+            for entry in stack.entries
+            if entry.status == "pruned" and before_status.get(entry.id) in {"active", "pinned"}
+        ]
+        if pruned_entry_ids:
+            events.append(
+                make_sp_event(
+                    "sp.memory.pruned",
+                    run_id=run_id,
+                    entry_ids=pruned_entry_ids,
+                    entry_count=len(pruned_entry_ids),
+                )
+            )
         if isinstance(pending, Mapping):
             feedback = _pending_feedback_value(effective_state, pending)
             if feedback:
@@ -311,6 +335,7 @@ def create_sp_agent_graph(
             state,
             context_builder=prompt_builder,
             system_prompt=system_prompt,
+            decision_context=decision_context,
             iteration=iteration,
             thread_id=thread_id,
             run_id=run_id,

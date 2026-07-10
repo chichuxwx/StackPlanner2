@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from deerflow.sp.actions.events import make_sp_event
 from deerflow.sp.actions.handlers.base import HandlerContext
 from deerflow.sp.actions.schema import HandlerResult, SPAction
 
@@ -32,4 +33,21 @@ class SummarizeHandler:
         state_update = {"sp_last_run_summary": summary}
         if action.stage:
             state_update["sp_current_stage"] = action.stage
-        return HandlerResult(next_step="continue", state_update=state_update, memory_entries=[entry], idempotency_key=action.idempotency_key)
+        events = []
+        if source_entry_ids:
+            events.append(
+                make_sp_event(
+                    "sp.memory.condensed",
+                    action_id=action.action_id,
+                    run_id=context.run_id,
+                    source_entry_ids=source_entry_ids,
+                    summary_entry_id=entry.id,
+                )
+            )
+        return HandlerResult(
+            next_step="continue",
+            state_update=state_update,
+            memory_entries=[entry],
+            idempotency_key=action.idempotency_key,
+            run_events=events,
+        )

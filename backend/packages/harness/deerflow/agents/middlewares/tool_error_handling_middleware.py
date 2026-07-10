@@ -281,6 +281,7 @@ def build_subagent_runtime_middlewares(
     lazy_init: bool = True,
     deferred_setup: "DeferredToolSetup | None" = None,
     agent_name: str | None = None,
+    memory_agent_name: str | None = None,
 ) -> list[AgentMiddleware]:
     """Middlewares shared by subagent runtime before subagent-only middlewares."""
     if app_config is None:
@@ -301,7 +302,7 @@ def build_subagent_runtime_middlewares(
     if agent_name == "sp-memory-recaller":
         from deerflow.agents.middlewares.dynamic_context_middleware import DynamicContextMiddleware
 
-        middlewares.append(DynamicContextMiddleware(agent_name=None, app_config=app_config))
+        middlewares.append(DynamicContextMiddleware(agent_name=memory_agent_name, app_config=app_config))
 
     if model_name is None and app_config.models:
         model_name = app_config.models[0].name

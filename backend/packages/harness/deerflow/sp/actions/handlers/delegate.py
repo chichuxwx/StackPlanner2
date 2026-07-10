@@ -86,6 +86,10 @@ class DelegateHandler:
             artifact_content = result.result
         if artifact_content is not None:
             artifact_type = result.artifact_type or _default_artifact_type(str(action.target_agent))
+            previous_artifact_id = _current_artifact_id(
+                context.state.get("sp_current_artifact_refs"),
+                artifact_type,
+            )
             artifact = self._artifact_adapter.write_text_artifact(
                 artifact_content,
                 artifact_type=artifact_type,
@@ -111,17 +115,34 @@ class DelegateHandler:
                     virtual_path=artifact.metadata.virtual_path,
                 )
             )
+            artifact_events.append(
+                make_sp_event(
+                    "sp.artifact.current_changed",
+                    action_id=action.action_id,
+                    run_id=context.run_id,
+                    previous_artifact_id=previous_artifact_id,
+                    current_artifact_id=artifact.metadata.artifact_id,
+                    artifact_type=artifact.metadata.type,
+                    version=artifact.metadata.version,
+                )
+            )
         else:
             created_paths = result.artifact_metadata.get("created_paths")
             if isinstance(created_paths, list):
                 artifact_state = dict(context.state)
                 registered_paths: list[str] = []
                 for created_path in created_paths:
+                    effective_state = {**artifact_state, **state_update}
+                    artifact_type = result.artifact_type or _default_artifact_type(str(action.target_agent))
+                    previous_artifact_id = _current_artifact_id(
+                        effective_state.get("sp_current_artifact_refs"),
+                        artifact_type,
+                    )
                     try:
                         artifact = self._artifact_adapter.register_existing_artifact(
                             str(created_path),
-                            artifact_type=result.artifact_type or _default_artifact_type(str(action.target_agent)),
-                            state={**artifact_state, **state_update},
+                            artifact_type=artifact_type,
+                            state=effective_state,
                             thread_id=context.thread_id,
                             run_id=context.run_id,
                             created_by=str(action.target_agent),
@@ -144,6 +165,17 @@ class DelegateHandler:
                             artifact_id=artifact.metadata.artifact_id,
                             artifact_type=artifact.metadata.type,
                             virtual_path=artifact.metadata.virtual_path,
+                        )
+                    )
+                    artifact_events.append(
+                        make_sp_event(
+                            "sp.artifact.current_changed",
+                            action_id=action.action_id,
+                            run_id=context.run_id,
+                            previous_artifact_id=previous_artifact_id,
+                            current_artifact_id=artifact.metadata.artifact_id,
+                            artifact_type=artifact.metadata.type,
+                            version=artifact.metadata.version,
                         )
                     )
                 if registered_paths:
@@ -228,3 +260,33 @@ def _merge_artifact_state_updates(existing: dict[str, Any], new: dict[str, Any])
     if "artifacts" in existing or "artifacts" in new:
         merged["artifacts"] = list(dict.fromkeys([*existing.get("artifacts", []), *new.get("artifacts", [])]))
     return merged
+
+
+def _artifact_version_family(artifact_type: str) -> set[str]:
+    if artifact_type in {"report", "report_revision", "final_report"}:
+        return {"report", "report_revision", "final_report"}
+    return {artifact_type}
+
+
+def _current_artifact_id(value: Any, artifact_type: str) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    family = _artifact_version_family(artifact_type)
+    candidates: list[dict[str, Any]] = []
+    for key, ref in value.items():
+        if key == "_history" or not isinstance(ref, dict):
+            continue
+        if ref.get("type") in family and ref.get("is_current", True):
+            candidates.append(ref)
+    history = value.get("_history")
+    if isinstance(history, list):
+        candidates.extend(
+            ref
+            for ref in history
+            if isinstance(ref, dict) and ref.get("type") in family and ref.get("is_current", False)
+        )
+    if not candidates:
+        return None
+    current = max(candidates, key=lambda ref: int(ref.get("version") or 0))
+    artifact_id = current.get("artifact_id")
+    return str(artifact_id) if artifact_id else None

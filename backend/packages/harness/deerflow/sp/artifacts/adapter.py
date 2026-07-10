@@ -242,10 +242,29 @@ class SPArtifactAdapter:
     def _merge_ref(self, existing: Any, artifact_metadata: SPArtifactMetadata) -> dict[str, Any]:
         refs = dict(existing) if isinstance(existing, dict) else {}
         ref = artifact_metadata.to_ref()
+        version_family = _version_family(artifact_metadata.type)
+        for key, value in list(refs.items()):
+            if key == "_history" or key not in version_family or not isinstance(value, dict):
+                continue
+            refs[key] = {**value, "is_current": False}
         refs[artifact_metadata.type] = ref
-        history = [item for item in refs.get("_history", []) if isinstance(item, dict)]
-        if not any(item.get("artifact_id") == ref["artifact_id"] and item.get("version") == ref["version"] for item in history):
+        history = [
+            {**item, "is_current": False} if item.get("type") in version_family else item
+            for item in refs.get("_history", [])
+            if isinstance(item, dict)
+        ]
+        matching_index = next(
+            (
+                index
+                for index, item in enumerate(history)
+                if item.get("artifact_id") == ref["artifact_id"] and item.get("version") == ref["version"]
+            ),
+            None,
+        )
+        if matching_index is None:
             history.append(ref)
+        else:
+            history[matching_index] = ref
         refs["_history"] = history[-50:]
         return refs
 

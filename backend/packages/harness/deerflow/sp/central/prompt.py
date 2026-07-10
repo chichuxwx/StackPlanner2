@@ -28,7 +28,8 @@ Rules:
 - If pending human interaction exists, do not choose FINISH.
 - FINISH requires no pending human interaction. Report/file tasks require a final artifact reference; only tasks that naturally produce no artifact may set metadata.allow_without_artifact=true.
 - DELEGATE is only a routing decision; tools are executed by subagents through handlers.
-- RECALL_MEMORY supplies metadata.memory_query or task; the handler routes to memory_recaller and remains read-only.
+- When an available Skill matches a DELEGATE task, set metadata.skill_names to a JSON list of exact Skill names. The handler rejects disabled, unavailable, or invented names; CentralAgent never reads Skill files itself.
+- RECALL_MEMORY supplies metadata.memory_query or task; the handler routes to memory_recaller and remains read-only. It may also set metadata.skill_names when the needed long-term signal is a procedural SOP rather than a fact.
 - Promotion to long-term memory is dry-run unless a later runtime hook explicitly writes through DR2 memory.
 - REFLECT diagnoses. BACKTRACK changes active state. Do not conflate them.
 - Large text belongs in Workspace/Artifact; ThreadState only receives refs.

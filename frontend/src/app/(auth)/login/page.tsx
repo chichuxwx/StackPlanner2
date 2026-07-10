@@ -198,9 +198,9 @@ export default function LoginPage() {
   const actualTheme = theme === "system" ? resolvedTheme : theme;
 
   return (
-    <div className="bg-background relative flex min-h-screen items-center justify-center overflow-y-auto overflow-x-hidden">
+    <div className="bg-background relative flex min-h-screen items-center justify-center overflow-x-hidden overflow-y-auto">
       <FlickeringGrid
-        className="mask-[url(/images/stackplanner-mark.svg)] mask-size-[88vw] mask-center mask-no-repeat md:mask-size-[62vh] absolute inset-0 z-0"
+        className="absolute inset-0 z-0 mask-[url(/images/stackplanner-mark.svg)] mask-size-[88vw] mask-center mask-no-repeat md:mask-size-[62vh]"
         squareSize={4}
         gridGap={4}
         color={actualTheme === "dark" ? "white" : "black"}

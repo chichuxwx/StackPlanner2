@@ -25,7 +25,7 @@ export async function Header({ className, homeURL, locale }: HeaderProps) {
   return (
     <header
       className={cn(
-        "container-md backdrop-blur-xs fixed left-0 right-0 top-0 z-20 mx-auto flex h-16 items-center justify-between gap-3 px-4",
+        "container-md fixed top-0 right-0 left-0 z-20 mx-auto flex h-16 items-center justify-between gap-3 px-4 backdrop-blur-xs",
         className,
       )}
     >
@@ -34,7 +34,7 @@ export async function Header({ className, homeURL, locale }: HeaderProps) {
           href={homeURL ?? PRODUCT_REPOSITORY_URL}
           target={isExternalHome ? "_blank" : "_self"}
           rel={isExternalHome ? "noopener noreferrer" : undefined}
-          className="whitespace-nowrap text-xl"
+          className="text-xl whitespace-nowrap"
         >
           <StackPlannerLogo />
         </a>
@@ -85,7 +85,7 @@ export async function Header({ className, homeURL, locale }: HeaderProps) {
           { href: "/blog/posts", label: t.home.blog },
         ]}
       />
-      <hr className="from-border/0 via-border/70 to-border/0 bg-linear-to-r absolute left-0 right-0 top-16 z-10 m-0 h-px w-full border-none" />
+      <hr className="from-border/0 via-border/70 to-border/0 absolute top-16 right-0 left-0 z-10 m-0 h-px w-full border-none bg-linear-to-r" />
     </header>
   );
 }

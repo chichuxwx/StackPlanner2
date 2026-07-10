@@ -217,6 +217,9 @@ def test_summarize_handler_condenses_sources_without_touching_pinned_feedback():
     assert by_id[feedback.id].status == "pinned"
     assert by_id[second.id].status == "condensed"
     assert restored.entries[-1].action == "summarize"
+    condensed_event = next(event for event in result.run_events if event["event_type"] == "sp.memory.condensed")
+    assert condensed_event["payload"]["source_entry_ids"] == [first.id, feedback.id, second.id]
+    assert condensed_event["payload"]["summary_entry_id"] == restored.entries[-1].id
 
 
 def test_backtrack_marks_entries_after_target_and_preserves_artifact_history():
@@ -255,6 +258,39 @@ def test_backtrack_marks_entries_after_target_and_preserves_artifact_history():
     assert result.state_update["sp_current_artifact_refs"]["report"]["artifact_id"] == "new"
     assert restored.entries[-1].action == "backtrack"
     assert any(event["event_type"] == "sp.memory.backtracked" for event in result.run_events)
+
+
+def test_backtrack_restores_artifact_current_version_and_emits_change_event():
+    state = {
+        "sp_current_artifact_refs": {
+            "report": {"artifact_id": "report-v1", "type": "report", "version": 1, "is_current": False},
+            "report_revision": {"artifact_id": "report-v2", "type": "report_revision", "version": 2, "is_current": True},
+            "_history": [
+                {"artifact_id": "report-v1", "type": "report", "version": 1, "is_current": False},
+                {"artifact_id": "report-v2", "type": "report_revision", "version": 2, "is_current": True},
+            ],
+        }
+    }
+    action = _action(
+        ActionType.BACKTRACK,
+        action_id="act-backtrack-report",
+        metadata={
+            "backtrack_target_type": "artifact_version",
+            "backtrack_target_id": "report-v1",
+            "rollback_scope": "artifact_refs",
+            "reason": "Revision used stale evidence",
+        },
+    )
+
+    result = build_default_action_router().execute(action, state=state, run_id="run-1")
+
+    refs = result.state_update["sp_current_artifact_refs"]
+    assert refs["report"]["is_current"] is True
+    assert refs["report_revision"]["is_current"] is False
+    assert [item["is_current"] for item in refs["_history"]] == [True, False]
+    event = next(event for event in result.run_events if event["event_type"] == "sp.artifact.current_changed")
+    assert event["payload"]["previous_artifact_id"] == "report-v2"
+    assert event["payload"]["current_artifact_id"] == "report-v1"
 
 
 def test_finish_handler_rejects_pending_human_and_accepts_final_ref():
@@ -404,6 +440,9 @@ def test_delegate_handler_calls_executor_and_externalizes_large_result(tmp_path)
     assert report_ref["artifact_id"] == restored.entries[-1].result_ref
     assert "Large report body" not in str(report_ref)
     assert any(event["event_type"] == "sp.delegate.completed" for event in result.run_events)
+    current_event = next(event for event in result.run_events if event["event_type"] == "sp.artifact.current_changed")
+    assert current_event["payload"]["previous_artifact_id"] is None
+    assert current_event["payload"]["current_artifact_id"] == report_ref["artifact_id"]
 
 
 def test_delegate_context_is_bounded_and_preserves_user_goal_and_pinned_feedback():
@@ -547,6 +586,7 @@ def test_delegate_handler_registers_coder_created_output_paths_as_artifacts(tmp_
     assert [ref["version"] for ref in history] == [1, 2]
     assert stack.entries[-1].result_ref == history[-1]["artifact_id"]
     assert sum(event["event_type"] == "sp.artifact.registered" for event in result.run_events) == 2
+    assert sum(event["event_type"] == "sp.artifact.current_changed" for event in result.run_events) == 2
 
 
 def test_recall_memory_handler_calls_memory_recaller_and_records_dry_run_result():
