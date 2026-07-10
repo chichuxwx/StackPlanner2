@@ -6,12 +6,27 @@ DeerFlow's ThreadState/checkpointer remains the persistence boundary.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
 EntryDict = dict[str, Any]
+
+MAX_ENTRY_CONTENT_CHARS = 2000
+MAX_FAILURE_NOTE_CHARS = 1000
+MAX_METADATA_JSON_CHARS = 8000
+MAX_METADATA_PREVIEW_CHARS = 2000
+
+
+def _bounded_text(value: Any, *, max_chars: int) -> str:
+    text = str(value or "")
+    if len(text) <= max_chars:
+        return text
+    suffix = "...<truncated>"
+    return f"{text[: max_chars - len(suffix)]}{suffix}"
 
 
 def utc_now_iso() -> str:
@@ -36,6 +51,33 @@ def _json_safe(value: Any) -> Any:
             "additional_kwargs": _json_safe(getattr(value, "additional_kwargs", {})),
         }
     return repr(value)
+
+
+def _bounded_metadata(value: Any) -> EntryDict:
+    normalized = _json_safe(value) or {}
+    if not isinstance(normalized, dict):
+        normalized = {"value": normalized}
+    serialized = json.dumps(normalized, ensure_ascii=False, sort_keys=True)
+    if len(serialized) <= MAX_METADATA_JSON_CHARS:
+        return normalized
+
+    preserved_keys = {
+        "action_id",
+        "interaction_id",
+        "legacy_action",
+        "legacy_agent_type",
+        "memory_query",
+        "status",
+        "target_agent",
+        "task_id",
+    }
+    preserved = {key: normalized[key] for key in preserved_keys if key in normalized}
+    return {
+        **preserved,
+        "_truncated": True,
+        "_sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+        "_preview": _bounded_text(serialized, max_chars=MAX_METADATA_PREVIEW_CHARS),
+    }
 
 
 def _priority_from_legacy(action: str, agent_type: str | None, result: Any) -> str:
@@ -89,11 +131,12 @@ class StackMemoryEntry:
         self.ts = str(self.ts or utc_now_iso())
         self.actor = str(self.actor or "central")
         self.action = str(self.action or "think")
-        self.content = str(self.content or "")
+        self.content = _bounded_text(self.content, max_chars=MAX_ENTRY_CONTENT_CHARS)
         self.priority = str(self.priority or "normal")
         self.status = str(self.status or "active")
         self.parent_ids = [str(parent_id) for parent_id in self.parent_ids]
-        self.metadata = _json_safe(self.metadata) or {}
+        self.failure_note = _bounded_text(self.failure_note, max_chars=MAX_FAILURE_NOTE_CHARS) if self.failure_note is not None else None
+        self.metadata = _bounded_metadata(self.metadata)
 
     @classmethod
     def from_dict(cls, data: EntryDict) -> StackMemoryEntry:
