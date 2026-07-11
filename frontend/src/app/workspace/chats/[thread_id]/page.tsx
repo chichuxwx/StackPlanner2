@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { type PromptInputMessage } from "@/components/ai-elements/prompt-input";
@@ -27,6 +27,7 @@ import {
   SidecarProvider,
   SidecarTrigger,
 } from "@/components/workspace/sidecar";
+import { StackPlannerRuntimeBadge } from "@/components/workspace/stack-planner-runtime-badge";
 import { ThreadScheduledTasksLink } from "@/components/workspace/thread-scheduled-tasks-link";
 import { ThreadTitle } from "@/components/workspace/thread-title";
 import { TodoList } from "@/components/workspace/todo-list";
@@ -79,11 +80,11 @@ export default function ChatPage() {
   });
   const branchThread = useBranchThread();
   const backendTokenUsage = threadTokenUsageToTokenUsage(threadTokenUsage.data);
-  const mountedRef = useRef(false);
+  const [isMounted, setIsMounted] = useState(false);
   useSpecificChatMode();
 
   useEffect(() => {
-    mountedRef.current = true;
+    setIsMounted(true);
   }, []);
 
   // Keep welcome layout in sync when navigating between threads (sidebar
@@ -274,6 +275,7 @@ export default function ChatPage() {
               <div className="flex min-w-0 flex-1 items-center text-sm font-medium">
                 <ThreadTitle threadId={threadId} thread={thread} />
               </div>
+              <StackPlannerRuntimeBadge />
               <div className="flex shrink-0 items-center gap-2">
                 {!isNewThread && (
                   <ThreadScheduledTasksLink threadId={threadId} />
@@ -370,7 +372,7 @@ export default function ChatPage() {
                       </div>
                     </div>
                   )}
-                  {mountedRef.current ? (
+                  {isMounted ? (
                     <InputBox
                       className={cn(
                         "bg-background/5 w-full",

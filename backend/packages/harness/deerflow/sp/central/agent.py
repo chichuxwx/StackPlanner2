@@ -89,4 +89,10 @@ class CentralAgentDecider:
                 HumanMessage(content="\n".join(user_parts)),
             ]
         )
-        return _extract_json_object(message_content_to_text(response.content))
+        decision_text = message_content_to_text(response.content)
+        if not decision_text.strip():
+            additional_kwargs = getattr(response, "additional_kwargs", {})
+            reasoning_content = additional_kwargs.get("reasoning_content") if isinstance(additional_kwargs, dict) else None
+            if isinstance(reasoning_content, str):
+                decision_text = reasoning_content
+        return _extract_json_object(decision_text)

@@ -708,11 +708,13 @@ export function MessageList({
             const turnUsageMessages = turnUsageMessagesByGroupIndex[groupIndex];
             const groupIsLoading =
               thread.isLoading && groupIndex === lastGroupIndex;
+            const groupKey =
+              group.id ?? `${group.type}-${groupIndex.toString()}`;
 
             if (group.type === "human" || group.type === "assistant") {
               return (
                 <div
-                  key={group.id}
+                  key={groupKey}
                   data-assistant-turn={
                     group.type === "assistant" ? "" : undefined
                   }
@@ -721,7 +723,9 @@ export function MessageList({
                     group.type === "assistant" && "group/assistant-turn",
                   )}
                 >
-                  {group.messages.map((msg) => {
+                  {group.messages.map((msg, messageIndex) => {
+                    const messageKey =
+                      msg.id ?? `${groupKey}-${messageIndex.toString()}`;
                     const item = (
                       <MessageListItem
                         message={msg}
@@ -749,12 +753,12 @@ export function MessageList({
                       !enableSidecarActions ||
                       msg.type !== "ai"
                     ) {
-                      return <div key={`${group.id}/${msg.id}`}>{item}</div>;
+                      return <div key={messageKey}>{item}</div>;
                     }
 
                     return (
                       <div
-                        key={`${group.id}/${msg.id}`}
+                        key={messageKey}
                         onMouseUp={(event) =>
                           handleAssistantTextSelection(
                             event,
@@ -798,7 +802,7 @@ export function MessageList({
                   humanInputRequest.request_id,
                 );
                 return (
-                  <div key={group.id} className="w-full">
+                  <div key={groupKey} className="w-full">
                     <HumanInputCard
                       answeredResponse={answeredResponse}
                       disabled={
@@ -831,7 +835,7 @@ export function MessageList({
 
               if (hasContent(message)) {
                 return (
-                  <div key={group.id} className="w-full">
+                  <div key={groupKey} className="w-full">
                     <MarkdownContent
                       content={extractContentFromMessage(message)}
                       isLoading={thread.isLoading}
@@ -854,7 +858,7 @@ export function MessageList({
                 }
               }
               return (
-                <div className="w-full" key={group.id}>
+                <div className="w-full" key={groupKey}>
                   {group.messages[0] && hasContent(group.messages[0]) && (
                     <MarkdownContent
                       content={extractContentFromMessage(group.messages[0])}
@@ -960,7 +964,7 @@ export function MessageList({
               }
               return (
                 <div
-                  key={"subtask-group-" + group.id}
+                  key={`subtask-group-${groupKey}`}
                   className="relative z-1 flex flex-col gap-2"
                 >
                   {results}
@@ -973,7 +977,7 @@ export function MessageList({
               );
             }
             return (
-              <div key={"group-" + group.id} className="w-full">
+              <div key={`group-${groupKey}`} className="w-full">
                 <MessageGroup
                   messages={group.messages}
                   isLoading={thread.isLoading}

@@ -61,6 +61,7 @@ export const ChainOfThought = memo(
       prop: open,
       defaultProp: defaultOpen,
       onChange: onOpenChange,
+      caller: "ChainOfThought",
     });
 
     const chainOfThoughtContext = useMemo(

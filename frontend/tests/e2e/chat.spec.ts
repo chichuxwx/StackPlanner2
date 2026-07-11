@@ -12,7 +12,32 @@ test.describe("Chat workspace", () => {
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("sp-runtime-indicator")).toHaveAttribute(
+      "data-assistant-id",
+      "stackplanner",
+    );
     await expect(page.getByRole("button", { name: /load more/i })).toBeHidden();
+  });
+
+  test("submits workspace runs to the StackPlanner assistant", async ({
+    page,
+  }) => {
+    let assistantId: string | undefined;
+    await page.route("**/runs/stream", (route) => {
+      const body = route.request().postDataJSON() as {
+        assistant_id?: string;
+      };
+      assistantId = body.assistant_id;
+      return handleRunStream(route);
+    });
+
+    await page.goto("/workspace/chats/new");
+    const textarea = page.getByPlaceholder(/how can i assist you/i);
+    await expect(textarea).toBeVisible({ timeout: 15_000 });
+    await textarea.fill("Verify the active runtime");
+    await textarea.press("Enter");
+
+    await expect.poll(() => assistantId).toBe("stackplanner");
   });
 
   test("can type a message in the input box", async ({ page }) => {

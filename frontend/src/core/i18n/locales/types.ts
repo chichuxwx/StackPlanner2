@@ -365,6 +365,7 @@ export interface Translations {
     loadMoreToSearch: string;
     loadingMore: string;
     loadOlderChats: string;
+    renameDescription: string;
   };
 
   // Sidecar
@@ -555,6 +556,7 @@ export interface Translations {
       addFact: string;
       addFactTitle: string;
       editFactTitle: string;
+      factEditorDescription: string;
       addFactSuccess: string;
       editFactSuccess: string;
       clearAll: string;

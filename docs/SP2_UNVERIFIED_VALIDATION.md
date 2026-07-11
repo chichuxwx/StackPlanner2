@@ -9,8 +9,10 @@
 - SP Action Loop、三层记忆、Subagent、Artifact、HITL、SOUL、Skills 和 Run/Event 已有单元与回归覆盖。
 - Gateway 可启动，`/health` 返回 200。
 - `http://123.59.6.244:8000/v1` 可访问，真实 Qwen3-32B 已完成一次 SP CentralAgent smoke test。
-- 当前仍未完成的是 authenticated browser E2E、真实外部工具长任务、多模态和生产跨进程恢复。
+- 本地账号认证、工作区加载和 SP Runtime 标识已完成浏览器验证。
+- 当前仍未完成的是认证状态下的真实 Artifact/HITL 全流程、真实外部工具长任务、多模态和生产跨进程恢复。
 - 长期 Memory 写入默认 dry-run 是设计约束，不属于验证失败。
+- 真实 Qwen 调用的主要剩余问题是远端响应延迟，不是 SP Action Loop 的本地计算耗时。
 
 ## 1. GitHub Lint 历史失败
 
@@ -21,7 +23,7 @@
 - Prettier。
 - ESLint。
 - TypeScript。
-- Frontend unit：`588 passed`。
+- Frontend unit：`590 passed`。
 - Next.js production build。
 
 当前修改已推送到 `origin/codex/sp-memory-migration`。仓库工作流只在 Pull Request 上触发，原 PR #2 已关闭，因此本轮新 SHA 没有自动创建 Actions run。
@@ -35,15 +37,18 @@
 
 ## 2. Authenticated API 与浏览器 E2E
 
-Gateway 当前使用新的本地 SQLite 数据目录，首启时没有管理员账号。按设计：
+本地管理员账号已经创建，本轮已验证：
 
 - `/health`：200。
-- `/api/*`：创建管理员前返回 401。
+- 本地账号登录：200。
+- 登录后 `/api/v1/auth/me`、thread search、models 和 skills：200。
+- 新对话页显示 `SP Runtime`，DOM 明确携带 `data-assistant-id="stackplanner"`。
+- 前端 E2E 已断言 `/runs/stream` 请求体使用 `assistant_id=stackplanner`。
+- 浏览器控制台未再出现 Dialog description、通知权限和 controlled/uncontrolled 警告。
 
 仍需完成：
 
-- [ ] 由仓库使用者在 `/setup` 创建测试管理员。
-- [ ] 登录后完成新建 StackPlanner thread、流式输出、Artifact 打开和 HITL resume。
+- [ ] 登录后完成真实 Artifact 打开和 HITL resume 全流程。
 - [ ] 验证桌面端与移动端关键页面。
 
 ## 3. 真实 Subagent 与外部服务
@@ -105,12 +110,26 @@ Gateway 当前使用新的本地 SQLite 数据目录，首启时没有管理员�
 
 测试组存在重叠，数字不能直接相加。
 
-| 范围 | 结果 |
-| --- | --- |
-| SP 全量 | `120 passed` |
-| DR2 指定回归 | `321 passed`，1 warning |
-| Frontend unit | `588 passed` |
-| Prettier / ESLint / TypeScript | 通过 |
-| Next production build | 通过，1 Turbopack warning |
-| Gateway health | 200 |
-| 真实 Qwen3-32B SP smoke | 1 Action FINISH，成功 |
+| 范围                           | 结果                                                            |
+| ------------------------------ | --------------------------------------------------------------- |
+| SP + RunJournal 回归           | `196 passed`                                                    |
+| CentralAgent 动作与长任务矩阵  | `50 passed`                                                     |
+| DR2 指定回归                   | `321 passed`，1 warning                                         |
+| Frontend unit                  | `590 passed`                                                    |
+| Prettier / ESLint / TypeScript | 通过                                                            |
+| Next production build          | 通过，1 Turbopack warning                                       |
+| Gateway health                 | 200                                                             |
+| Authenticated browser smoke    | 登录成功，`SP Runtime` 可见，控制台 0 warning/error             |
+| 真实 Qwen3-32B SP smoke        | run `ffa32e98...`，1 次 LLM、1 Action FINISH、2602 tokens，成功 |
+
+## 如何确认运行的是 SP2，而不是仅替换界面
+
+按可信度从界面到后端检查：
+
+1. 聊天页显示 `SP Runtime`，元素的 `data-assistant-id` 为 `stackplanner`。
+2. `/runs/stream` 请求体中的 `assistant_id` 为 `stackplanner`。
+3. `runs` 表记录 `assistant_id=stackplanner`。
+4. 同一 run 存在 `sp.action.created`、`sp.central.decided`、`sp.handler.*`、`sp.loop.*` 事件。
+5. 最终 checkpoint/state 包含 `sp_task_memory`、`sp_current_stage`、`sp_last_action_id` 等 SP 字段。
+
+本轮真实 smoke 满足第 2 至第 5 项。修复后 CentralAgent 从 Qwen/vLLM 的 `reasoning_content` 正确解析动作 JSON，避免空 `content` 被误判为无动作并重复调用模型。

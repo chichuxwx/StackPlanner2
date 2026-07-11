@@ -66,7 +66,6 @@ export function useNotification(): UseNotificationReturn {
       }
 
       if (currentPermission !== "granted") {
-        console.warn("Notification permission not granted");
         return;
       }
 

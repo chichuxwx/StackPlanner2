@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -361,6 +362,7 @@ export function RecentChatList() {
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle>{t.common.rename}</DialogTitle>
+            <DialogDescription>{t.chats.renameDescription}</DialogDescription>
           </DialogHeader>
           <div className="py-4">
             <Input
