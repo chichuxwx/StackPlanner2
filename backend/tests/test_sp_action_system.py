@@ -425,6 +425,66 @@ def test_finish_handler_rejects_pending_human_and_accepts_final_ref():
     assert TaskMemoryStack.from_dict(accepted.state_update["sp_task_memory"]).entries[-1].action == "finish"
 
 
+def test_finish_does_not_reuse_an_artifact_from_an_older_run():
+    router = build_default_action_router()
+    result = router.execute(
+        _action(ActionType.FINISH, action_id="finish-new-run", task="Complete the new request"),
+        state={
+            "sp_loop_run_id": "old-run",
+            "sp_current_artifact_refs": {
+                "report_revision": {
+                    "artifact_id": "old-greeting-report",
+                    "type": "report_revision",
+                    "run_id": "old-run",
+                    "is_current": True,
+                }
+            }
+        },
+        run_id="new-run",
+    )
+
+    assert result.next_step == "error_recoverable"
+    assert result.error == "FINISH requires a final artifact ref or allow_without_artifact=true"
+
+
+def test_reporter_can_start_a_new_task_when_only_an_older_report_exists(tmp_path):
+    executor = FakeSubagentExecutor(
+        SPSubagentResult(
+            status=SPSubagentStatus.COMPLETED,
+            result="new report",
+            task_id="new-report",
+            artifact_content="# New report",
+            artifact_type="report_revision",
+        )
+    )
+    action = _action(
+        ActionType.DELEGATE,
+        action_id="new-report-action",
+        target_agent="reporter",
+        task="Create a report for the new user request",
+    )
+
+    result = build_default_action_router(delegate_executor=executor).execute(
+        action,
+        state={
+            "thread_data": {"outputs_path": str(tmp_path)},
+            "sp_current_artifact_refs": {
+                "report_revision": {
+                    "artifact_id": "old-greeting-report",
+                    "type": "report_revision",
+                    "run_id": "old-run",
+                    "is_current": True,
+                }
+            },
+        },
+        thread_id="thread-1",
+        run_id="new-run",
+    )
+
+    assert result.next_step == "continue"
+    assert [task.action_id for task in executor.tasks] == ["new-report-action"]
+
+
 def test_ask_human_interrupts_and_records_pending_interaction():
     state = {"sp_current_artifact_refs": {"outline": {"artifact_id": "outline-1", "type": "outline"}}}
     action = _action(

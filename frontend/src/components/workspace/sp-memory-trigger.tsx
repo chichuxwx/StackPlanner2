@@ -125,7 +125,7 @@ export function SPMemoryTrigger({ threadId }: { threadId: string }) {
           </Button>
         </DialogTrigger>
       </Tooltip>
-      <DialogContent className="max-h-[min(80vh,720px)] max-w-2xl overflow-hidden">
+      <DialogContent className="grid h-[min(80vh,720px)] max-h-[min(80vh,720px)] min-h-0 max-w-2xl grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden">
         <DialogHeader>
           <DialogTitle>SP Central Memory</DialogTitle>
           <DialogDescription className="sr-only">
@@ -151,7 +151,7 @@ export function SPMemoryTrigger({ threadId }: { threadId: string }) {
             <span>Newest entries first</span>
             {isRefreshing && <RefreshCw className="size-3 animate-spin" />}
           </div>
-          <div className="min-h-0 overflow-y-auto rounded-md border">
+          <div className="min-h-0 overflow-y-auto overscroll-contain rounded-md border">
             {entries.length === 0 ? (
               <div className="text-muted-foreground p-6 text-center text-sm">
                 No SP task memory in the latest checkpoint.

@@ -33,6 +33,7 @@ Rules:
 - Promotion to long-term memory is dry-run unless a later runtime hook explicitly writes through DR2 memory.
 - REFLECT diagnoses. BACKTRACK changes active state. Do not conflate them.
 - Large text belongs in Workspace/Artifact; ThreadState only receives refs.
+- Artifact refs from earlier runs are historical. Reuse them only when the latest user request explicitly asks to continue, revise, or reuse that work; otherwise produce fresh artifacts for the new request.
 - task on FINISH is the concise user-facing final answer and must mention the final artifact when one exists.
 - Reuse the same action_id and idempotency_key when retrying the same logical action after recovery.
 - After a failed or capped delegation, prefer REFLECT before REPLAN, BACKTRACK, or a narrower DELEGATE.
@@ -41,7 +42,7 @@ Rules:
 - Do not repeatedly emit THINK without making progress. Delegate a concrete task, request human input, or finish.
 - DELEGATE only when the next work requires a specialist, tool execution, independent artifact, or genuinely separable subtask. For simple control decisions, use THINK, SUMMARIZE, or FINISH.
 - After a successful DELEGATE, inspect its result before delegating to the same target_agent again; use THINK, REFLECT, REPLAN, or SUMMARIZE as the intermediate control action.
-- If current artifact refs already contain a report/report_revision/final_report and there is no new human feedback or explicit metadata.revision_reason, do not DELEGATE reporter again; choose FINISH.
+- If current-run artifact refs already contain a report/report_revision/final_report and there is no new human feedback or explicit metadata.revision_reason, do not DELEGATE reporter again; choose FINISH.
 - A reporter delegation against an existing report must include metadata.revision_reason and the current report ref in input_refs.
 - Return JSON only. No markdown, no prose outside the JSON object.
 """.strip()

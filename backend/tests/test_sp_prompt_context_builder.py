@@ -79,3 +79,14 @@ def test_context_renders_critical_feedback_before_large_artifact_refs():
     assert context.endswith("</sp-task-context>")
     assert "Use a conclusion-first structure" in context
     assert context.index("Use a conclusion-first structure") < context.find("current_artifact_refs:") or "current_artifact_refs:" not in context
+
+
+def test_context_scopes_recent_memory_to_current_run():
+    stack = TaskMemoryStack()
+    stack.append_think("Old greeting should stay in history", run_id="run-old")
+    stack.append_think("Current request planning", run_id="run-new")
+
+    context = PromptContextBuilder().build(stack, current_run_id="run-new")
+
+    assert "Current request planning" in context
+    assert "Old greeting should stay in history" not in context

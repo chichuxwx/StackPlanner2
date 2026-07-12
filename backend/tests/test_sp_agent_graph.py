@@ -109,6 +109,48 @@ def test_graph_runs_think_then_finish_and_emits_user_facing_message_and_events()
     assert event_types[-1] == "sp.loop.completed"
 
 
+def test_graph_starts_a_new_user_run_without_reusing_previous_summary_or_stage():
+    first = _graph(
+        ScriptedDecider(
+            [
+                _action(
+                    ActionType.FINISH,
+                    "finish-greeting",
+                    task="你好！今天有什么我可以帮你的吗？",
+                    metadata={"allow_without_artifact": True},
+                )
+            ]
+        )
+    ).invoke(
+        {"messages": [HumanMessage(content="你好", id="user-1")]},
+        context={"thread_id": "thread-new-task", "run_id": "run-greeting"},
+    )
+
+    second_decider = ScriptedDecider(
+        [
+            _action(ActionType.THINK, "plan-report", task="Plan the new report", stage="planning"),
+            _action(
+                ActionType.FINISH,
+                "finish-report",
+                task="北京大学计算机学院调研报告已完成。",
+                metadata={"allow_without_artifact": True},
+            ),
+        ]
+    )
+    second = _graph(second_decider).invoke(
+        {
+            **first,
+            "messages": [*first["messages"], HumanMessage(content="帮我生成北京大学计算机学院调研报告", id="user-2")],
+        },
+        context={"thread_id": "thread-new-task", "run_id": "run-report"},
+    )
+
+    assert second["sp_current_stage"] == "finished"
+    assert second["sp_last_run_summary"] == "北京大学计算机学院调研报告已完成。"
+    assert second["messages"][-1].content == "北京大学计算机学院调研报告已完成。"
+    assert "current_stage: perception" in second_decider.requests[0].task_context
+
+
 def test_graph_recovers_from_invalid_action_without_losing_iteration_budget():
     decider = ScriptedDecider(
         [

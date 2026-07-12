@@ -45,7 +45,7 @@ class DelegateHandler:
                 error="DELEGATE requires a SP subagent executor",
             )
 
-        if _is_unrequested_report_revision(action, context.state):
+        if _is_unrequested_report_revision(action, context.state, run_id=context.run_id):
             entry = context.stack.append(
                 StackMemoryEntry(
                     thread_id=context.thread_id,
@@ -288,7 +288,7 @@ def _default_artifact_type(target_agent: str) -> str:
     }.get(target_agent, "generated_file")
 
 
-def _is_unrequested_report_revision(action: SPAction, state: Mapping[str, Any]) -> bool:
+def _is_unrequested_report_revision(action: SPAction, state: Mapping[str, Any], *, run_id: str | None = None) -> bool:
     """Prevent model drift from creating report versions without new intent."""
     if action.target_agent != "reporter":
         return False
@@ -300,7 +300,12 @@ def _is_unrequested_report_revision(action: SPAction, state: Mapping[str, Any]) 
         return False
     for key in ("report_revision", "final_report", "report"):
         ref = refs.get(key)
-        if isinstance(ref, dict) and ref.get("artifact_id") and ref.get("is_current", True):
+        if (
+            isinstance(ref, dict)
+            and ref.get("artifact_id")
+            and ref.get("is_current", True)
+            and (not run_id or ref.get("run_id") == run_id)
+        ):
             return True
     return False
 

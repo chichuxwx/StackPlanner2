@@ -256,6 +256,7 @@ class ThreadState(AgentState):
     sp_current_artifact_refs: NotRequired[SPArtifactRefs | None]
     sp_current_report_version: NotRequired[str | None]
     sp_last_run_summary: NotRequired[str | None]
+    sp_last_final_artifact_ref: NotRequired[str | None]
     sp_current_action_id: NotRequired[str | None]
     sp_current_action: NotRequired[dict[str, Any] | None]
     sp_last_action_id: NotRequired[str | None]

@@ -114,6 +114,7 @@ class TaskMemoryMiddleware(AgentMiddleware[ThreadState]):
             pending_human_interaction=_mapping_or_none(state.get("sp_pending_human_interaction")),
             artifact_refs=_mapping_or_none(state.get("sp_current_artifact_refs")),
             report_version=state.get("sp_current_report_version"),
+            current_run_id=_run_id(runtime),
         )
         context_message = HumanMessage(
             content=context,
