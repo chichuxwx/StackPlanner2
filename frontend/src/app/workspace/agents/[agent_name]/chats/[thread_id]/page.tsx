@@ -25,6 +25,7 @@ import {
   SidecarProvider,
   SidecarTrigger,
 } from "@/components/workspace/sidecar";
+import { SPMemoryTrigger } from "@/components/workspace/sp-memory-trigger";
 import { ThreadTitle } from "@/components/workspace/thread-title";
 import { TodoList } from "@/components/workspace/todo-list";
 import { TokenUsageIndicator } from "@/components/workspace/token-usage-indicator";
@@ -283,6 +284,7 @@ export default function AgentChatPage() {
                   }
                 />
                 <SidecarTrigger />
+                <SPMemoryTrigger threadId={threadId} />
                 <ExportTrigger threadId={threadId} />
                 <ArtifactTrigger />
               </div>

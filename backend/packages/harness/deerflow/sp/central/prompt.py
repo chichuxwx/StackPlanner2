@@ -39,6 +39,8 @@ Rules:
 - After BACKTRACK, choose REPLAN before FINISH or another broad delegation.
 - Use SUMMARIZE at stage boundaries or when recent task memory is repetitive; never summarize away pinned feedback.
 - Do not repeatedly emit THINK without making progress. Delegate a concrete task, request human input, or finish.
+- DELEGATE only when the next work requires a specialist, tool execution, independent artifact, or genuinely separable subtask. For simple control decisions, use THINK, SUMMARIZE, or FINISH.
+- After a successful DELEGATE, inspect its result before delegating to the same target_agent again; use THINK, REFLECT, REPLAN, or SUMMARIZE as the intermediate control action.
 - If current artifact refs already contain a report/report_revision/final_report and there is no new human feedback or explicit metadata.revision_reason, do not DELEGATE reporter again; choose FINISH.
 - A reporter delegation against an existing report must include metadata.revision_reason and the current report ref in input_refs.
 - Return JSON only. No markdown, no prose outside the JSON object.

@@ -10,7 +10,7 @@ from deerflow.sp.actions.handlers import AskHumanHandler, BacktrackHandler, Dele
 from deerflow.sp.actions.handlers.base import BaseActionHandler
 from deerflow.sp.actions.schema import ActionType, ActionValidationError, HandlerResult, SPAction
 from deerflow.sp.artifacts import SPArtifactAdapter
-from deerflow.sp.memory import TaskMemoryStack
+from deerflow.sp.memory import StackMemoryEntry, TaskMemoryStack
 from deerflow.sp.subagents import SPSubagentExecutorProtocol
 
 DEFAULT_MAX_LOOP_ITERATIONS = 20
@@ -56,6 +56,20 @@ class ActionRouter:
         limit_result = self._loop_limit_result(action, state, run_id=run_id)
         if limit_result is not None:
             return limit_result
+
+        delegation_policy = self._delegation_policy_result(action, state, run_id=run_id)
+        if delegation_policy is not None:
+            stack = TaskMemoryStack.from_dict(state.get("sp_task_memory"), run_id=run_id)
+            for entry in delegation_policy.memory_entries:
+                stack.append(entry)
+            delegation_policy.state_update = self._build_state_update(
+                action,
+                state,
+                stack,
+                delegation_policy,
+                run_id=run_id,
+            )
+            return delegation_policy
 
         forced_reflection = self._forced_recovery_reflection(action, state, run_id=run_id)
         if forced_reflection is not None:
@@ -142,6 +156,52 @@ class ActionRouter:
             next_step=next_step,  # type: ignore[arg-type]
             idempotency_key=action.idempotency_key,
             run_events=[make_sp_event("sp.action.duplicate_skipped", action_id=action.action_id, run_id=run_id, idempotency_key=action.idempotency_key)],
+        )
+
+    def _delegation_policy_result(self, action: SPAction, state: Mapping[str, Any], *, run_id: str | None) -> HandlerResult | None:
+        """Require a new control decision before repeating the same delegation target."""
+        if action.action_type != ActionType.DELEGATE:
+            return None
+        previous = state.get("sp_last_handler_result")
+        if not isinstance(previous, Mapping):
+            return None
+        if previous.get("next_step") != "continue" or previous.get("action_type") != ActionType.DELEGATE.value:
+            return None
+        if action.target_agent == "reporter":
+            # DelegateHandler has a stricter report-version guard that returns
+            # FINISH when no explicit revision intent exists.
+            return None
+        if previous.get("target_agent") != action.target_agent:
+            return None
+
+        content = (
+            f"Blocked a consecutive delegation to {action.target_agent}. "
+            "CentralAgent must inspect the previous result with THINK, REFLECT, REPLAN, or SUMMARIZE "
+            "before delegating to the same specialist again."
+        )
+        entry = StackMemoryEntry(
+            thread_id=None,
+            run_id=run_id,
+            actor="policy",
+            action="delegate_skipped",
+            content=content,
+            stage=action.stage,
+            priority="high",
+            metadata={"action_id": action.action_id, "target_agent": action.target_agent},
+        )
+        return HandlerResult(
+            next_step="continue",
+            memory_entries=[entry],
+            idempotency_key=action.idempotency_key,
+            run_events=[
+                make_sp_event(
+                    "sp.delegate.policy_blocked",
+                    action_id=action.action_id,
+                    run_id=run_id,
+                    target_agent=action.target_agent,
+                    reason="same_target_requires_intermediate_control_action",
+                )
+            ],
         )
 
     def _loop_limit_result(self, action: SPAction, state: Mapping[str, Any], *, run_id: str | None) -> HandlerResult | None:
@@ -257,6 +317,7 @@ class ActionRouter:
                 "action_id": action.action_id,
                 "action_type": action.action_type.value,
                 "idempotency_key": action.idempotency_key,
+                "target_agent": action.target_agent,
             },
         }
         ledger = dict(state.get("sp_idempotency_ledger")) if isinstance(state.get("sp_idempotency_ledger"), Mapping) else {}

@@ -35,6 +35,13 @@ export interface AgentThreadState extends Record<string, unknown> {
   artifacts?: string[];
   todos?: Todo[];
   goal?: GoalState | null;
+  sp_task_memory?: {
+    version?: number;
+    entries?: Array<Record<string, unknown>>;
+  };
+  sp_current_stage?: string | null;
+  sp_active_delegate_id?: string | null;
+  sp_current_artifact_refs?: Record<string, unknown> | null;
 }
 
 export interface AgentThreadContext extends Record<string, unknown> {

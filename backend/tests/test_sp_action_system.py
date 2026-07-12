@@ -187,6 +187,67 @@ def test_router_retries_recoverable_action_with_same_idempotency_key():
     assert any(event["event_type"] == "sp.handler.completed" for event in result.run_events)
 
 
+def test_router_blocks_consecutive_delegation_to_same_target_until_control_action():
+    executor = FakeSubagentExecutor(
+        SPSubagentResult(
+            status=SPSubagentStatus.COMPLETED,
+            result="should not run",
+            task_id="unexpected",
+        )
+    )
+    state = {
+        "sp_last_handler_result": {
+            "next_step": "continue",
+            "action_type": "DELEGATE",
+            "target_agent": "researcher",
+            "action_id": "previous-research",
+        }
+    }
+    action = _action(
+        ActionType.DELEGATE,
+        action_id="repeat-research",
+        target_agent="researcher",
+        task="Search another angle",
+    )
+
+    result = build_default_action_router(delegate_executor=executor).execute(action, state=state)
+
+    assert result.next_step == "continue"
+    assert executor.tasks == []
+    assert result.memory_entries[0].action == "delegate_skipped"
+    assert any(event["event_type"] == "sp.delegate.policy_blocked" for event in result.run_events)
+
+
+def test_router_allows_delegation_to_new_target_after_previous_delegation():
+    executor = FakeSubagentExecutor(
+        SPSubagentResult(
+            status=SPSubagentStatus.COMPLETED,
+            result="coder completed",
+            task_id="coder-1",
+        )
+    )
+    action = _action(
+        ActionType.DELEGATE,
+        action_id="coder-after-research",
+        target_agent="coder",
+        task="Implement the verified change",
+    )
+
+    result = build_default_action_router(delegate_executor=executor).execute(
+        action,
+        state={
+            "sp_last_handler_result": {
+                "next_step": "continue",
+                "action_type": "DELEGATE",
+                "target_agent": "researcher",
+            }
+        },
+    )
+
+    assert result.next_step == "continue"
+    assert [task.subagent_type for task in executor.tasks] == ["coder"]
+
+
 def test_router_forces_reflection_before_a_new_action_after_failure():
     state = {
         "sp_last_idempotency_key": "failed-action",
@@ -815,5 +876,7 @@ def test_central_prompt_enforces_action_json_and_no_direct_tools():
     assert "Do not repeatedly emit THINK" in prompt
     assert "After BACKTRACK, choose REPLAN" in prompt
     assert "do not DELEGATE reporter again" in prompt
+    assert "only when the next work requires a specialist" in prompt
+    assert "same target_agent again" in prompt
     assert "metadata.revision_reason" in prompt
     assert "REFLECT" in prompt
