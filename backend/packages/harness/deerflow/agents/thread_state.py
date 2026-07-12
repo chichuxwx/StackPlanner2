@@ -260,6 +260,7 @@ class ThreadState(AgentState):
     sp_current_action: NotRequired[dict[str, Any] | None]
     sp_last_action_id: NotRequired[str | None]
     sp_last_idempotency_key: NotRequired[str | None]
+    sp_idempotency_ledger: NotRequired[dict[str, dict[str, Any]] | None]
     sp_last_handler_result: NotRequired[dict[str, Any] | None]
     sp_loop_iteration: NotRequired[int | None]
     sp_loop_run_id: NotRequired[str | None]

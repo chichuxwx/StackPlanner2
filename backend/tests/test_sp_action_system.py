@@ -128,6 +128,39 @@ def test_router_skips_duplicate_idempotency_key():
     assert result.run_events[0]["event_type"] == "sp.action.duplicate_skipped"
 
 
+def test_router_skips_idempotency_key_seen_earlier_in_the_run():
+    state = {
+        "sp_idempotency_ledger": {
+            "idem-1": {
+                "next_step": "continue",
+                "action_type": "DELEGATE",
+                "action_id": "act-first",
+            },
+            "idem-2": {
+                "next_step": "continue",
+                "action_type": "THINK",
+                "action_id": "act-second",
+            },
+        },
+        "sp_last_idempotency_key": "idem-2",
+        "sp_last_handler_result": {"next_step": "continue", "action_type": "THINK"},
+        "sp_loop_iteration": 2,
+    }
+    action = _action(
+        ActionType.DELEGATE,
+        action_id="act-repeat",
+        idempotency_key="idem-1",
+        target_agent="reporter",
+        task="Repeat",
+    )
+
+    result = build_default_action_router().execute(action, state=state)
+
+    assert result.next_step == "continue"
+    assert result.run_events[0]["event_type"] == "sp.action.duplicate_skipped"
+    assert result.state_update["sp_idempotency_ledger"]["idem-1"]["action_id"] == "act-repeat"
+
+
 def test_router_retries_recoverable_action_with_same_idempotency_key():
     state = {
         "sp_last_idempotency_key": "idem-retry",
@@ -152,6 +185,27 @@ def test_router_retries_recoverable_action_with_same_idempotency_key():
     stack = TaskMemoryStack.from_dict(result.state_update["sp_task_memory"])
     assert stack.entries[-1].content == "Retry after recovery"
     assert any(event["event_type"] == "sp.handler.completed" for event in result.run_events)
+
+
+def test_router_forces_reflection_before_a_new_action_after_failure():
+    state = {
+        "sp_last_idempotency_key": "failed-action",
+        "sp_last_handler_result": {
+            "next_step": "error_recoverable",
+            "action_id": "failed-action-id",
+            "action_type": "DELEGATE",
+            "idempotency_key": "failed-action",
+            "error": "researcher timed out",
+        },
+        "sp_loop_iteration": 1,
+    }
+    action = _action(ActionType.FINISH, action_id="finish-too-early", task="Finish now")
+
+    result = build_default_action_router().execute(action, state=state)
+
+    assert result.next_step == "continue"
+    assert TaskMemoryStack.from_dict(result.state_update["sp_task_memory"]).entries[-1].action == "reflect"
+    assert any(event["event_type"] == "sp.action.policy_reflection_forced" for event in result.run_events)
 
 
 def test_router_does_not_reopen_answered_duplicate_human_request():
@@ -445,6 +499,76 @@ def test_delegate_handler_calls_executor_and_externalizes_large_result(tmp_path)
     assert current_event["payload"]["current_artifact_id"] == report_ref["artifact_id"]
 
 
+def test_reporter_does_not_create_unrequested_revision_when_current_report_exists():
+    executor = FakeSubagentExecutor(
+        SPSubagentResult(
+            status=SPSubagentStatus.COMPLETED,
+            result="should not run",
+            task_id="unexpected",
+            artifact_content="unexpected revision",
+            artifact_type="report_revision",
+        )
+    )
+    action = _action(
+        ActionType.DELEGATE,
+        action_id="act-repeat-report",
+        target_agent="reporter",
+        task="Generate the report again",
+    )
+
+    result = build_default_action_router(delegate_executor=executor).execute(
+        action,
+        state={"sp_current_artifact_refs": {"report_revision": {"artifact_id": "report-v1", "is_current": True}}},
+    )
+
+    assert result.next_step == "finish"
+    assert executor.tasks == []
+    assert any(event["event_type"] == "sp.delegate.duplicate_skipped" for event in result.run_events)
+
+
+def test_repeated_reporter_actions_keep_one_report_version(tmp_path):
+    executor = FakeSubagentExecutor(
+        SPSubagentResult(
+            status=SPSubagentStatus.COMPLETED,
+            result="initial report",
+            task_id="report-task",
+            artifact_content="# Report v1",
+            artifact_type="report_revision",
+        )
+    )
+    router = build_default_action_router(delegate_executor=executor)
+    first = _action(
+        ActionType.DELEGATE,
+        action_id="report-first",
+        target_agent="reporter",
+        task="Create the report",
+    )
+    first_result = router.execute(
+        first,
+        state={"thread_data": {"outputs_path": str(tmp_path)}},
+        thread_id="thread-report",
+        run_id="run-report",
+    )
+    second = _action(
+        ActionType.DELEGATE,
+        action_id="report-second",
+        target_agent="reporter",
+        task="Create the report again",
+    )
+
+    second_result = router.execute(
+        second,
+        state=first_result.state_update,
+        thread_id="thread-report",
+        run_id="run-report",
+    )
+
+    assert second_result.next_step == "finish"
+    assert len(executor.tasks) == 1
+    refs = first_result.state_update["sp_current_artifact_refs"]
+    assert refs["report_revision"]["version"] == 1
+
+
 def test_delegate_context_is_bounded_and_preserves_user_goal_and_pinned_feedback():
     stack = TaskMemoryStack(max_size=50)
     for index in range(30):
@@ -474,6 +598,7 @@ def test_delegate_context_is_bounded_and_preserves_user_goal_and_pinned_feedback
         action_id="act-context",
         target_agent="reporter",
         task="Revise the report",
+        metadata={"revision_reason": "Pinned human feedback requires a revision."},
     )
 
     result = build_default_action_router(delegate_executor=executor).execute(action, state=state)
@@ -689,3 +814,6 @@ def test_central_prompt_enforces_action_json_and_no_direct_tools():
     assert "handler routes to memory_recaller" in prompt
     assert "Do not repeatedly emit THINK" in prompt
     assert "After BACKTRACK, choose REPLAN" in prompt
+    assert "do not DELEGATE reporter again" in prompt
+    assert "metadata.revision_reason" in prompt
+    assert "REFLECT" in prompt

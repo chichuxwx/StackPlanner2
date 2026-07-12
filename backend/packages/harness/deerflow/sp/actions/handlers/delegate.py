@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from deerflow.sp.actions.events import make_sp_event
@@ -42,6 +43,38 @@ class DelegateHandler:
                 next_step="error_recoverable",
                 idempotency_key=action.idempotency_key,
                 error="DELEGATE requires a SP subagent executor",
+            )
+
+        if _is_unrequested_report_revision(action, context.state):
+            entry = context.stack.append(
+                StackMemoryEntry(
+                    thread_id=context.thread_id,
+                    run_id=context.run_id,
+                    actor="central",
+                    action="delegate_skipped",
+                    content=(
+                        "Skipped a repeated reporter delegation because a current report artifact already exists. "
+                        "A new report revision requires explicit metadata.revision_reason and the current artifact ref."
+                    ),
+                    stage=action.stage,
+                    priority="high",
+                    metadata={"action_id": action.action_id, "target_agent": action.target_agent},
+                )
+            )
+            return HandlerResult(
+                next_step="finish",
+                state_update={"sp_active_delegate_id": None},
+                memory_entries=[entry],
+                idempotency_key=action.idempotency_key,
+                run_events=[
+                    make_sp_event(
+                        "sp.delegate.duplicate_skipped",
+                        action_id=action.action_id,
+                        run_id=context.run_id,
+                        target_agent=action.target_agent,
+                        reason="current_report_exists_without_revision_reason",
+                    )
+                ],
             )
 
         delegate_entry = context.stack.append_delegate(
@@ -253,6 +286,23 @@ def _default_artifact_type(target_agent: str) -> str:
         "coder": "generated_file",
         "perception": "generated_file",
     }.get(target_agent, "generated_file")
+
+
+def _is_unrequested_report_revision(action: SPAction, state: Mapping[str, Any]) -> bool:
+    """Prevent model drift from creating report versions without new intent."""
+    if action.target_agent != "reporter":
+        return False
+    revision_reason = action.metadata.get("revision_reason")
+    if isinstance(revision_reason, str) and revision_reason.strip():
+        return False
+    refs = state.get("sp_current_artifact_refs")
+    if not isinstance(refs, dict):
+        return False
+    for key in ("report_revision", "final_report", "report"):
+        ref = refs.get(key)
+        if isinstance(ref, dict) and ref.get("artifact_id") and ref.get("is_current", True):
+            return True
+    return False
 
 
 def _merge_artifact_state_updates(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:

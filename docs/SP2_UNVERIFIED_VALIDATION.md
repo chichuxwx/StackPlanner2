@@ -14,6 +14,23 @@
 - 长期 Memory 写入默认 dry-run 是设计约束，不属于验证失败。
 - 真实 Qwen 调用的主要剩余问题是远端响应延迟，不是 SP Action Loop 的本地计算耗时。
 
+## 部署前安全检查
+
+上线服务器前逐项确认：
+
+- [ ] 保持鉴权开启；不要设置 `DEER_FLOW_AUTH_DISABLED=1`。
+- [ ] 设置稳定且高强度的 `AUTH_JWT_SECRET`，多进程和重启期间保持不变。
+- [ ] 生产环境设置 `GATEWAY_ENABLE_DOCS=false`，避免暴露 Swagger/ReDoc。
+- [ ] `GATEWAY_CORS_ORIGINS` 只填写实际前端 Origin，不使用 `*`。
+- [ ] 前端通过 HTTPS 访问，Gateway 只对内网或反向代理开放。
+- [ ] `DEER_FLOW_INTERNAL_GATEWAY_BASE_URL` 指向内网 Gateway，不把内部地址暴露给浏览器。
+- [ ] 生产启动不要使用 `--reload`；开发入口脚本只用于本地调试。
+- [ ] 模型 API Key 只放在服务器环境变量或密钥服务中，不提交 Git，不写入前端。
+- [ ] 已在聊天记录中暴露过的模型 API Key 应在部署前轮换。
+- [ ] 反向代理限制请求体大小、连接超时和并发，日志中不要记录 Authorization、Cookie 或 API Key。
+
+本轮修复还增加了 Artifact 下载链接的协议校验、认证下载、路径归属校验和安全响应头；这些是代码防线，不能替代服务器侧的 HTTPS、鉴权和网络隔离。
+
 ## 1. GitHub Lint 历史失败
 
 [Lint Check #29086580243](https://github.com/chichuxwx/StackPlanner2/actions/runs/29086580243) 的失败点是 5 个 TSX 文件未通过 Prettier。
@@ -23,7 +40,7 @@
 - Prettier。
 - ESLint。
 - TypeScript。
-- Frontend unit：`590 passed`。
+- Frontend unit：`592 passed`。
 - Next.js production build。
 
 当前修改已推送到 `origin/codex/sp-memory-migration`。仓库工作流只在 Pull Request 上触发，原 PR #2 已关闭，因此本轮新 SHA 没有自动创建 Actions run。
@@ -112,10 +129,10 @@
 
 | 范围                           | 结果                                                            |
 | ------------------------------ | --------------------------------------------------------------- |
-| SP + RunJournal 回归           | `196 passed`                                                    |
-| CentralAgent 动作与长任务矩阵  | `50 passed`                                                     |
+| SP/Artifact/Path/RunJournal 回归 | `212 passed`                                                    |
+| CentralAgent 动作与长任务矩阵    | 已包含在上项，不能重复相加                                      |
 | DR2 指定回归                   | `321 passed`，1 warning                                         |
-| Frontend unit                  | `590 passed`                                                    |
+| Frontend unit                  | `592 passed`                                                    |
 | Prettier / ESLint / TypeScript | 通过                                                            |
 | Next production build          | 通过，1 Turbopack warning                                       |
 | Gateway health                 | 200                                                             |

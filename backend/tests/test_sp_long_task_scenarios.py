@@ -238,10 +238,11 @@ def test_long_task_recovers_replans_versions_artifacts_and_resumes_after_human_f
             _action(
                 ActionType.DELEGATE,
                 "report-revision",
-                target_agent="reporter",
-                task="Revise report v1 using the pinned human feedback",
-                stage="revision",
-            ),
+                    target_agent="reporter",
+                    task="Revise report v1 using the pinned human feedback",
+                    stage="revision",
+                    metadata={"revision_reason": "Pinned human feedback requires a revision."},
+                ),
             _action(
                 ActionType.FINISH,
                 "finish-report",

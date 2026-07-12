@@ -14,6 +14,7 @@ from deerflow.sp.memory import TaskMemoryStack
 from deerflow.sp.subagents import SPSubagentExecutorProtocol
 
 DEFAULT_MAX_LOOP_ITERATIONS = 20
+MAX_IDEMPOTENCY_LEDGER_ENTRIES = 100
 
 
 class ActionRouter:
@@ -56,6 +57,10 @@ class ActionRouter:
         if limit_result is not None:
             return limit_result
 
+        forced_reflection = self._forced_recovery_reflection(action, state, run_id=run_id)
+        if forced_reflection is not None:
+            return forced_reflection
+
         handler = self._handlers.get(action.action_type)
         if handler is None:
             return self._unsupported_result(action, state, run_id=run_id)
@@ -95,11 +100,14 @@ class ActionRouter:
         return result
 
     def _duplicate_result(self, action: SPAction, state: Mapping[str, Any], *, run_id: str | None) -> HandlerResult | None:
-        if state.get("sp_last_idempotency_key") != action.idempotency_key:
+        ledger = state.get("sp_idempotency_ledger")
+        previous = ledger.get(action.idempotency_key) if isinstance(ledger, Mapping) else None
+        if not isinstance(previous, Mapping) and state.get("sp_last_idempotency_key") == action.idempotency_key:
+            previous = state.get("sp_last_handler_result")
+        if not isinstance(previous, Mapping):
             return None
-        last_result = state.get("sp_last_handler_result") if isinstance(state.get("sp_last_handler_result"), dict) else {}
-        next_step = str(last_result.get("next_step") or "continue")
-        previous_action_type = last_result.get("action_type")
+        next_step = str(previous.get("next_step") or "continue")
+        previous_action_type = previous.get("action_type")
         if previous_action_type and previous_action_type != action.action_type.value:
             error = f"idempotency_key {action.idempotency_key!r} was already used by {previous_action_type}, not {action.action_type.value}"
             return HandlerResult(
@@ -150,6 +158,53 @@ class ActionRouter:
             error=error,
             run_events=[make_sp_event("sp.handler.failed", action_id=action.action_id, run_id=run_id, error=error)],
         )
+
+    def _forced_recovery_reflection(
+        self,
+        action: SPAction,
+        state: Mapping[str, Any],
+        *,
+        run_id: str | None,
+    ) -> HandlerResult | None:
+        """Force one REFLECT before a new action follows a recoverable failure."""
+        previous = state.get("sp_last_handler_result")
+        if not isinstance(previous, Mapping) or previous.get("next_step") != "error_recoverable":
+            return None
+        if not previous.get("action_type"):
+            return None
+        if action.action_type in {ActionType.REFLECT, ActionType.ASK_HUMAN}:
+            return None
+        previous_key = previous.get("idempotency_key") or state.get("sp_last_idempotency_key")
+        if action.idempotency_key == previous_key:
+            # Retrying the same logical operation is explicitly allowed.
+            return None
+
+        reflect_handler = self._handlers.get(ActionType.REFLECT)
+        if reflect_handler is None:
+            return None
+        failure = str(previous.get("error") or "The previous action failed and needs diagnosis.")
+        reflect_action = SPAction.create(
+            ActionType.REFLECT,
+            action_id=f"sp-recovery-reflect-{action.action_id}",
+            idempotency_key=f"sp-recovery-reflect-{previous_key or action.idempotency_key}",
+            reason="Diagnose the previous recoverable action failure before continuing.",
+            task=failure,
+            stage=str(state.get("sp_current_stage") or action.stage or "verification"),
+            priority="high",
+            metadata={"failure_note": failure, "triggered_by_action_id": action.action_id},
+        )
+        result = self.execute(reflect_action, state=state, run_id=run_id)
+        result.run_events.insert(
+            0,
+            make_sp_event(
+                "sp.action.policy_reflection_forced",
+                action_id=action.action_id,
+                run_id=run_id,
+                failed_action_id=previous.get("action_id"),
+                requested_action_type=action.action_type.value,
+            ),
+        )
+        return result
 
     def _unsupported_result(self, action: SPAction, state: Mapping[str, Any], *, run_id: str | None) -> HandlerResult:
         error = f"No handler registered for {action.action_type.value}"
@@ -204,6 +259,10 @@ class ActionRouter:
                 "idempotency_key": action.idempotency_key,
             },
         }
+        ledger = dict(state.get("sp_idempotency_ledger")) if isinstance(state.get("sp_idempotency_ledger"), Mapping) else {}
+        ledger.pop(action.idempotency_key, None)
+        ledger[action.idempotency_key] = dict(state_update["sp_last_handler_result"])
+        state_update["sp_idempotency_ledger"] = dict(list(ledger.items())[-MAX_IDEMPOTENCY_LEDGER_ENTRIES:])
         if result.artifact_refs:
             existing_refs = state.get("sp_current_artifact_refs") if isinstance(state.get("sp_current_artifact_refs"), dict) else {}
             state_update["sp_current_artifact_refs"] = {**existing_refs, **result.artifact_refs}
