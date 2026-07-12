@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
@@ -15,6 +15,7 @@ from deerflow.agents.middlewares.title_middleware import TitleMiddleware
 from deerflow.config.app_config import AppConfig, get_app_config
 from deerflow.models import create_chat_model
 from deerflow.sp.central import CENTRAL_AGENT_ACTION_PROMPT, create_sp_central_decider
+from deerflow.sp.central.runtime_context import SPCentralRuntimeContext, build_sp_central_runtime_context
 from deerflow.sp.graph import DEFAULT_SP_MAX_ITERATIONS, create_sp_agent_graph
 from deerflow.sp.subagents import DR2SubagentExecutorAdapter, SPSubagentExecutorProtocol, SPSubagentResult, SPSubagentTask
 from deerflow.tracing import build_tracing_callbacks
@@ -40,11 +41,11 @@ def _runtime_config(config: RunnableConfig) -> dict[str, Any]:
     return merged
 
 
-def _resolve_model_name(config: RunnableConfig, app_config: AppConfig) -> str:
+def _resolve_model_name(config: RunnableConfig, app_config: AppConfig, *, agent_model: str | None = None) -> str:
     if not app_config.models:
         raise ValueError("StackPlanner requires at least one configured chat model.")
     runtime = _runtime_config(config)
-    requested = runtime.get("model_name") or runtime.get("model")
+    requested = runtime.get("model_name") or runtime.get("model") or agent_model
     if requested and app_config.get_model_config(str(requested)) is not None:
         return str(requested)
     if requested:
@@ -56,6 +57,32 @@ def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
+def _apply_task_skill_policy(
+    subagent_config: Any,
+    task: SPSubagentTask,
+    *,
+    available_skill_names: frozenset[str] | None,
+):
+    """Apply the CentralAgent's requested Skill whitelist to one delegate."""
+    raw_skill_names = task.metadata.get("skill_names")
+    if raw_skill_names is None:
+        configured = subagent_config.skills
+        if configured is None or available_skill_names is None:
+            return subagent_config
+        filtered = [name for name in configured if name in available_skill_names]
+        return replace(subagent_config, skills=filtered) if filtered != configured else subagent_config
+
+    if not isinstance(raw_skill_names, list) or any(not isinstance(name, str) or not name.strip() for name in raw_skill_names):
+        raise ValueError("SP action metadata.skill_names must be a list of non-empty Skill names")
+    requested = list(dict.fromkeys(name.strip() for name in raw_skill_names))
+    if available_skill_names is None:
+        raise ValueError("SP Skill catalog is unavailable; cannot validate metadata.skill_names")
+    unavailable = sorted(set(requested) - set(available_skill_names))
+    if unavailable:
+        raise ValueError(f"SP action requested unavailable or disabled Skills: {unavailable}")
+    return replace(subagent_config, skills=requested)
+
+
 @dataclass(slots=True)
 class DR2SPExecutorProvider:
     """Create DR2 SubagentExecutor instances bound to the active graph state."""
@@ -63,6 +90,9 @@ class DR2SPExecutorProvider:
     app_config: AppConfig
     parent_model: str
     runnable_config: RunnableConfig
+    available_skill_names: frozenset[str] | None = None
+    memory_agent_name: str | None = None
+    user_id: str | None = None
     _tools: list[Any] | None = field(default=None, init=False, repr=False)
 
     def _available_tools(self) -> list[Any]:
@@ -88,6 +118,11 @@ class DR2SPExecutorProvider:
             subagent_config = get_subagent_config(registry_name, app_config=self.app_config) if registry_name else None
             if subagent_config is None or not subagent_config.internal:
                 raise ValueError(f"Unknown StackPlanner subagent type: {task.subagent_type}")
+            subagent_config = _apply_task_skill_policy(
+                subagent_config,
+                task,
+                available_skill_names=self.available_skill_names,
+            )
             thread_id = str(context.get("thread_id") or task.thread_id or "") or None
             run_id = str(context.get("run_id") or task.run_id or "") or None
             return SubagentExecutor(
@@ -99,13 +134,15 @@ class DR2SPExecutorProvider:
                 thread_data=state.get("thread_data"),
                 thread_id=thread_id,
                 trace_id=str(metadata.get("trace_id") or uuid.uuid4().hex[:8]),
-                user_id=str(context.get("user_id")) if context.get("user_id") else None,
+                user_id=str(context.get("user_id") or self.user_id) if context.get("user_id") or self.user_id else None,
                 user_role=str(context.get("user_role")) if context.get("user_role") else None,
                 oauth_provider=str(context.get("oauth_provider")) if context.get("oauth_provider") else None,
                 oauth_id=str(context.get("oauth_id")) if context.get("oauth_id") else None,
                 run_id=run_id,
                 channel_user_id=str(context.get("channel_user_id")) if context.get("channel_user_id") else None,
                 deerflow_trace_id=str(context.get("deerflow_trace_id")) if context.get("deerflow_trace_id") else None,
+                memory_agent_name=self.memory_agent_name if task.subagent_type == "memory_recaller" else None,
+                user_scoped_skills=True,
             )
 
         def observe_raw_result(raw_result: Any) -> None:
@@ -168,8 +205,23 @@ class _ProgressReportingExecutor:
 def make_sp_agent(config: RunnableConfig, *, app_config: AppConfig | None = None):
     """LangGraph-compatible factory used by the existing DR2 Gateway/RunWorker."""
     resolved_app_config = app_config or get_app_config()
-    model_name = _resolve_model_name(config, resolved_app_config)
     runtime = _runtime_config(config)
+    from deerflow.runtime.user_context import get_effective_user_id
+
+    raw_user_id = runtime.get("user_id")
+    user_id = str(raw_user_id) if raw_user_id else get_effective_user_id()
+    raw_agent_name = runtime.get("sp_agent_name") or runtime.get("agent_name")
+    agent_name = str(raw_agent_name) if raw_agent_name else None
+    central_context: SPCentralRuntimeContext = build_sp_central_runtime_context(
+        resolved_app_config,
+        agent_name=agent_name,
+        user_id=user_id,
+    )
+    model_name = _resolve_model_name(
+        config,
+        resolved_app_config,
+        agent_model=central_context.agent_model,
+    )
     model_config = resolved_app_config.get_model_config(model_name)
     thinking_enabled = bool(runtime.get("thinking_enabled", True))
     if model_config is not None and not model_config.supports_thinking:
@@ -182,6 +234,8 @@ def make_sp_agent(config: RunnableConfig, *, app_config: AppConfig | None = None
             "model_name": model_name,
             "thinking_enabled": thinking_enabled,
             "orchestration_mode": STACKPLANNER_ASSISTANT_ID,
+            "sp_agent_name": central_context.agent_name or "default",
+            "available_skills": sorted(central_context.available_skill_names) if central_context.available_skill_names is not None else None,
         }
     )
     tracing_callbacks = build_tracing_callbacks()
@@ -197,13 +251,20 @@ def make_sp_agent(config: RunnableConfig, *, app_config: AppConfig | None = None
     )
     max_iterations = int(runtime.get("sp_max_loop_iterations") or DEFAULT_SP_MAX_ITERATIONS)
     max_iterations = max(1, min(max_iterations, DEFAULT_SP_MAX_ITERATIONS))
+    system_prompt = CENTRAL_AGENT_ACTION_PROMPT
+    if central_context.system_prompt_section:
+        system_prompt = f"{system_prompt}\n\n{central_context.system_prompt_section}"
     graph = create_sp_agent_graph(
         decider=create_sp_central_decider(model=model),
-        system_prompt=CENTRAL_AGENT_ACTION_PROMPT,
+        system_prompt=system_prompt,
+        decision_context=central_context.decision_context,
         executor_provider=DR2SPExecutorProvider(
             app_config=resolved_app_config,
             parent_model=model_name,
             runnable_config=config,
+            available_skill_names=central_context.available_skill_names,
+            memory_agent_name=central_context.agent_name,
+            user_id=user_id,
         ),
         title_middleware=TitleMiddleware(app_config=resolved_app_config),
         max_iterations=max_iterations,

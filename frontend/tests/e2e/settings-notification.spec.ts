@@ -53,6 +53,7 @@ async function openNotificationSettings(page: Page) {
   await page.getByRole("menuitem", { name: "Settings" }).click();
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveAttribute("aria-describedby", /.+/);
   await dialog.getByRole("button", { name: "Notification" }).click();
   return dialog;
 }

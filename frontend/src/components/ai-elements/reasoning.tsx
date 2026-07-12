@@ -9,7 +9,14 @@ import {
 import { cn } from "@/lib/utils";
 import { BrainIcon, ChevronDownIcon } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
-import { createContext, memo, useContext, useEffect, useState } from "react";
+import {
+  createContext,
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+} from "react";
 import { reasoningPlugins } from "@/core/streamdown/plugins";
 import { Shimmer } from "./shimmer";
 import { ClipboardSafeStreamdown } from "./streamdown";
@@ -62,12 +69,21 @@ export const Reasoning = memo(
       prop: open,
       defaultProp: defaultOpen,
       onChange: onOpenChange,
+      caller: "Reasoning",
     });
-    const [duration, setDuration] = useControllableState<number | undefined>({
-      prop: durationProp,
-      defaultProp: undefined,
-      onChange: onTurnDurationChange,
-    });
+    // Duration starts empty while a turn is streaming, then becomes available
+    // when the timer finishes. That lifecycle is not a controlled-mode switch.
+    const [measuredDuration, setMeasuredDuration] = useState<
+      number | undefined
+    >(() => durationProp);
+    const duration = durationProp ?? measuredDuration;
+    const setDuration = useCallback(
+      (nextDuration: number | undefined) => {
+        setMeasuredDuration(nextDuration);
+        onTurnDurationChange?.(nextDuration);
+      },
+      [onTurnDurationChange],
+    );
 
     const [hasAutoClosed, setHasAutoClosed] = useState(false);
     const [startTime, setStartTime] = useState<number | null>(

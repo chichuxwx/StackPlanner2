@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from deerflow.sp.actions.events import make_sp_event
 from deerflow.sp.actions.handlers.base import HandlerContext
 from deerflow.sp.actions.schema import HandlerResult, SPAction
 
@@ -23,11 +24,12 @@ class FinishHandler:
                 idempotency_key=action.idempotency_key,
                 error="FINISH is blocked while sp_pending_human_interaction exists",
                 run_events=[
-                    {
-                        "event_type": "sp.finish.rejected",
-                        "action_id": action.action_id,
-                        "payload": {"reason": "pending_human_interaction"},
-                    }
+                    make_sp_event(
+                        "sp.finish.rejected",
+                        action_id=action.action_id,
+                        run_id=context.run_id,
+                        reason="pending_human_interaction",
+                    )
                 ],
             )
         if not _has_final_artifact(context, action):
@@ -36,11 +38,12 @@ class FinishHandler:
                 idempotency_key=action.idempotency_key,
                 error="FINISH requires a final artifact ref or allow_without_artifact=true",
                 run_events=[
-                    {
-                        "event_type": "sp.finish.rejected",
-                        "action_id": action.action_id,
-                        "payload": {"reason": "missing_final_artifact"},
-                    }
+                    make_sp_event(
+                        "sp.finish.rejected",
+                        action_id=action.action_id,
+                        run_id=context.run_id,
+                        reason="missing_final_artifact",
+                    )
                 ],
             )
 
@@ -60,5 +63,5 @@ class FinishHandler:
             },
             memory_entries=[entry],
             idempotency_key=action.idempotency_key,
-            run_events=[{"event_type": "sp.finish.accepted", "action_id": action.action_id, "payload": {}}],
+            run_events=[make_sp_event("sp.finish.accepted", action_id=action.action_id, run_id=context.run_id)],
         )

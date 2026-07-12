@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from deerflow.sp.actions.events import make_sp_event
@@ -42,6 +43,38 @@ class DelegateHandler:
                 next_step="error_recoverable",
                 idempotency_key=action.idempotency_key,
                 error="DELEGATE requires a SP subagent executor",
+            )
+
+        if _is_unrequested_report_revision(action, context.state):
+            entry = context.stack.append(
+                StackMemoryEntry(
+                    thread_id=context.thread_id,
+                    run_id=context.run_id,
+                    actor="central",
+                    action="delegate_skipped",
+                    content=(
+                        "Skipped a repeated reporter delegation because a current report artifact already exists. "
+                        "A new report revision requires explicit metadata.revision_reason and the current artifact ref."
+                    ),
+                    stage=action.stage,
+                    priority="high",
+                    metadata={"action_id": action.action_id, "target_agent": action.target_agent},
+                )
+            )
+            return HandlerResult(
+                next_step="finish",
+                state_update={"sp_active_delegate_id": None},
+                memory_entries=[entry],
+                idempotency_key=action.idempotency_key,
+                run_events=[
+                    make_sp_event(
+                        "sp.delegate.duplicate_skipped",
+                        action_id=action.action_id,
+                        run_id=context.run_id,
+                        target_agent=action.target_agent,
+                        reason="current_report_exists_without_revision_reason",
+                    )
+                ],
             )
 
         delegate_entry = context.stack.append_delegate(
@@ -86,6 +119,10 @@ class DelegateHandler:
             artifact_content = result.result
         if artifact_content is not None:
             artifact_type = result.artifact_type or _default_artifact_type(str(action.target_agent))
+            previous_artifact_id = _current_artifact_id(
+                context.state.get("sp_current_artifact_refs"),
+                artifact_type,
+            )
             artifact = self._artifact_adapter.write_text_artifact(
                 artifact_content,
                 artifact_type=artifact_type,
@@ -111,17 +148,34 @@ class DelegateHandler:
                     virtual_path=artifact.metadata.virtual_path,
                 )
             )
+            artifact_events.append(
+                make_sp_event(
+                    "sp.artifact.current_changed",
+                    action_id=action.action_id,
+                    run_id=context.run_id,
+                    previous_artifact_id=previous_artifact_id,
+                    current_artifact_id=artifact.metadata.artifact_id,
+                    artifact_type=artifact.metadata.type,
+                    version=artifact.metadata.version,
+                )
+            )
         else:
             created_paths = result.artifact_metadata.get("created_paths")
             if isinstance(created_paths, list):
                 artifact_state = dict(context.state)
                 registered_paths: list[str] = []
                 for created_path in created_paths:
+                    effective_state = {**artifact_state, **state_update}
+                    artifact_type = result.artifact_type or _default_artifact_type(str(action.target_agent))
+                    previous_artifact_id = _current_artifact_id(
+                        effective_state.get("sp_current_artifact_refs"),
+                        artifact_type,
+                    )
                     try:
                         artifact = self._artifact_adapter.register_existing_artifact(
                             str(created_path),
-                            artifact_type=result.artifact_type or _default_artifact_type(str(action.target_agent)),
-                            state={**artifact_state, **state_update},
+                            artifact_type=artifact_type,
+                            state=effective_state,
                             thread_id=context.thread_id,
                             run_id=context.run_id,
                             created_by=str(action.target_agent),
@@ -144,6 +198,17 @@ class DelegateHandler:
                             artifact_id=artifact.metadata.artifact_id,
                             artifact_type=artifact.metadata.type,
                             virtual_path=artifact.metadata.virtual_path,
+                        )
+                    )
+                    artifact_events.append(
+                        make_sp_event(
+                            "sp.artifact.current_changed",
+                            action_id=action.action_id,
+                            run_id=context.run_id,
+                            previous_artifact_id=previous_artifact_id,
+                            current_artifact_id=artifact.metadata.artifact_id,
+                            artifact_type=artifact.metadata.type,
+                            version=artifact.metadata.version,
                         )
                     )
                 if registered_paths:
@@ -223,8 +288,55 @@ def _default_artifact_type(target_agent: str) -> str:
     }.get(target_agent, "generated_file")
 
 
+def _is_unrequested_report_revision(action: SPAction, state: Mapping[str, Any]) -> bool:
+    """Prevent model drift from creating report versions without new intent."""
+    if action.target_agent != "reporter":
+        return False
+    revision_reason = action.metadata.get("revision_reason")
+    if isinstance(revision_reason, str) and revision_reason.strip():
+        return False
+    refs = state.get("sp_current_artifact_refs")
+    if not isinstance(refs, dict):
+        return False
+    for key in ("report_revision", "final_report", "report"):
+        ref = refs.get(key)
+        if isinstance(ref, dict) and ref.get("artifact_id") and ref.get("is_current", True):
+            return True
+    return False
+
+
 def _merge_artifact_state_updates(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
     merged = {**existing, **new}
     if "artifacts" in existing or "artifacts" in new:
         merged["artifacts"] = list(dict.fromkeys([*existing.get("artifacts", []), *new.get("artifacts", [])]))
     return merged
+
+
+def _artifact_version_family(artifact_type: str) -> set[str]:
+    if artifact_type in {"report", "report_revision", "final_report"}:
+        return {"report", "report_revision", "final_report"}
+    return {artifact_type}
+
+
+def _current_artifact_id(value: Any, artifact_type: str) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    family = _artifact_version_family(artifact_type)
+    candidates: list[dict[str, Any]] = []
+    for key, ref in value.items():
+        if key == "_history" or not isinstance(ref, dict):
+            continue
+        if ref.get("type") in family and ref.get("is_current", True):
+            candidates.append(ref)
+    history = value.get("_history")
+    if isinstance(history, list):
+        candidates.extend(
+            ref
+            for ref in history
+            if isinstance(ref, dict) and ref.get("type") in family and ref.get("is_current", False)
+        )
+    if not candidates:
+        return None
+    current = max(candidates, key=lambda ref: int(ref.get("version") or 0))
+    artifact_id = current.get("artifact_id")
+    return str(artifact_id) if artifact_id else None

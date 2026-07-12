@@ -65,7 +65,7 @@ export const enUS: Translations = {
   welcome: {
     greeting: "Hello, again!",
     description:
-      "Welcome to 🦌 DeerFlow, an open source super agent. With built-in and custom skills, DeerFlow helps you search on the web, analyze data, and generate artifacts like slides, web pages and do almost anything.",
+      "Welcome to StackPlanner 2.0, with explicit task-memory orchestration and multi-agent action routing on the DeerFlow 2.0 runtime. It can research, code, and generate artifacts such as reports, slides, and web pages.",
 
     createYourOwnSkill: "Create Your Own Skill",
     createYourOwnSkillDescription:
@@ -457,6 +457,7 @@ export const enUS: Translations = {
     loadMoreToSearch: "Load more to search older conversations",
     loadingMore: "Loading more...",
     loadOlderChats: "Load older chats",
+    renameDescription: "Enter a new name for this conversation.",
   },
 
   // Sidecar
@@ -665,6 +666,8 @@ export const enUS: Translations = {
       addFact: "Add fact",
       addFactTitle: "Add memory fact",
       editFactTitle: "Edit memory fact",
+      factEditorDescription:
+        "Set the fact content, category, and confidence score.",
       addFactSuccess: "Fact created",
       editFactSuccess: "Fact updated",
       clearAll: "Clear all memory",

@@ -789,6 +789,9 @@ export function MemorySettingsPage() {
             <DialogTitle>
               {factToEdit ? editFactTitle : addFactTitle}
             </DialogTitle>
+            <DialogDescription>
+              {t.settings.memory.factEditorDescription}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">

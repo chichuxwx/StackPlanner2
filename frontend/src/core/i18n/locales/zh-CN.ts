@@ -65,7 +65,7 @@ export const zhCN: Translations = {
   welcome: {
     greeting: "你好，欢迎回来！",
     description:
-      "欢迎使用 🦌 DeerFlow，一个完全开源的超级智能体。通过内置和自定义的 Skills，\nDeerFlow 可以帮你搜索网络、分析数据，还能为你生成幻灯片、\n图片、视频、播客及网页等，几乎可以做任何事情。",
+      "欢迎使用 StackPlanner 2.0。它在 DeerFlow 2.0 runtime 上提供显式任务记忆编排与多智能体 Action 路由，可完成研究、编码并生成报告、幻灯片和网页等产物。",
 
     createYourOwnSkill: "创建你自己的 Agent SKill",
     createYourOwnSkillDescription:
@@ -440,6 +440,7 @@ export const zhCN: Translations = {
     loadMoreToSearch: "加载更多以搜索更早的对话",
     loadingMore: "正在加载...",
     loadOlderChats: "加载更早的对话",
+    renameDescription: "输入这个对话的新名称。",
   },
 
   // Sidecar
@@ -642,6 +643,7 @@ export const zhCN: Translations = {
       addFact: "添加事实",
       addFactTitle: "添加记忆事实",
       editFactTitle: "编辑记忆事实",
+      factEditorDescription: "设置记忆事实的内容、类别和置信度。",
       addFactSuccess: "事实已创建",
       editFactSuccess: "事实已更新",
       clearAll: "清空全部记忆",

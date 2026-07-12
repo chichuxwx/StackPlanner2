@@ -28,7 +28,8 @@ Rules:
 - If pending human interaction exists, do not choose FINISH.
 - FINISH requires no pending human interaction. Report/file tasks require a final artifact reference; only tasks that naturally produce no artifact may set metadata.allow_without_artifact=true.
 - DELEGATE is only a routing decision; tools are executed by subagents through handlers.
-- RECALL_MEMORY supplies metadata.memory_query or task; the handler routes to memory_recaller and remains read-only.
+- When an available Skill matches a DELEGATE task, set metadata.skill_names to a JSON list of exact Skill names. The handler rejects disabled, unavailable, or invented names; CentralAgent never reads Skill files itself.
+- RECALL_MEMORY supplies metadata.memory_query or task; the handler routes to memory_recaller and remains read-only. It may also set metadata.skill_names when the needed long-term signal is a procedural SOP rather than a fact.
 - Promotion to long-term memory is dry-run unless a later runtime hook explicitly writes through DR2 memory.
 - REFLECT diagnoses. BACKTRACK changes active state. Do not conflate them.
 - Large text belongs in Workspace/Artifact; ThreadState only receives refs.
@@ -38,5 +39,7 @@ Rules:
 - After BACKTRACK, choose REPLAN before FINISH or another broad delegation.
 - Use SUMMARIZE at stage boundaries or when recent task memory is repetitive; never summarize away pinned feedback.
 - Do not repeatedly emit THINK without making progress. Delegate a concrete task, request human input, or finish.
+- If current artifact refs already contain a report/report_revision/final_report and there is no new human feedback or explicit metadata.revision_reason, do not DELEGATE reporter again; choose FINISH.
+- A reporter delegation against an existing report must include metadata.revision_reason and the current report ref in input_refs.
 - Return JSON only. No markdown, no prose outside the JSON object.
 """.strip()

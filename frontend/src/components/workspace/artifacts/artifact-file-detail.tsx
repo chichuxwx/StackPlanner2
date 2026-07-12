@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { CodeEditor } from "@/components/workspace/code-editor";
+import { downloadArtifact } from "@/core/artifacts/download";
 import { useArtifactContent } from "@/core/artifacts/hooks";
 import {
   appendHtmlPreviewBaseHref,
@@ -37,7 +38,7 @@ import {
   getArtifactViewState,
   HTML_PREVIEW_SCROLL_MESSAGE_SOURCE,
 } from "@/core/artifacts/preview";
-import { urlOfArtifact } from "@/core/artifacts/utils";
+import { artifactDownloadURL, urlOfArtifact } from "@/core/artifacts/utils";
 import { useAuth } from "@/core/auth/AuthProvider";
 import { extractCitationSources } from "@/core/citations/sources";
 import { writeTextToClipboard } from "@/core/clipboard";
@@ -316,17 +317,17 @@ export function ArtifactFileDetail({
                 label={t.common.download}
                 tooltip={t.common.download}
                 onClick={() => {
-                  const w = window.open(
-                    urlOfArtifact({
-                      filepath,
-                      threadId,
-                      download: true,
-                      isMock,
-                    }),
-                    "_blank",
-                    "noopener,noreferrer",
-                  );
-                  if (w) w.opener = null;
+                  void downloadArtifact({
+                    url: artifactDownloadURL(
+                      urlOfArtifact({
+                        filepath,
+                        threadId,
+                        download: true,
+                        isMock,
+                      }),
+                    ),
+                    filename: getFileName(filepath),
+                  }).catch(() => toast.error("Artifact download failed"));
                 }}
               />
             )}
@@ -400,20 +401,18 @@ function ArtifactDownloadFallback({
         <p className="text-muted-foreground text-sm">
           This file type cannot be previewed in the browser.
         </p>
-        <Button asChild>
-          <a
-            href={urlOfArtifact({
-              filepath,
-              threadId,
-              download: true,
-              isMock,
-            })}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <DownloadIcon className="size-4" />
-            Download
-          </a>
+        <Button
+          onClick={() => {
+            void downloadArtifact({
+              url: artifactDownloadURL(
+                urlOfArtifact({ filepath, threadId, download: true, isMock }),
+              ),
+              filename,
+            }).catch(() => toast.error("Artifact download failed"));
+          }}
+        >
+          <DownloadIcon className="size-4" />
+          Download
         </Button>
       </div>
     </div>

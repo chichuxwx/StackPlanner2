@@ -7,13 +7,15 @@ from deerflow.sp import CENTRAL_AGENT_ACTION_PROMPT, CentralAgentDecider, Centra
 
 
 class FakeCentralModel:
-    def __init__(self, content: str):
+    def __init__(self, content: str, *, reasoning_content: str | None = None):
         self.content = content
+        self.reasoning_content = reasoning_content
         self.calls: list[list[object]] = []
 
     def invoke(self, messages):
         self.calls.append(messages)
-        return AIMessage(content=self.content)
+        additional_kwargs = {"reasoning_content": self.reasoning_content} if self.reasoning_content is not None else {}
+        return AIMessage(content=self.content, additional_kwargs=additional_kwargs)
 
 
 def test_central_agent_decider_parses_action_json_and_uses_bounded_context():
@@ -56,6 +58,24 @@ def test_central_agent_decider_rejects_non_json_output():
 
     with pytest.raises(ValueError, match="JSON object"):
         CentralAgentDecider(model=model).decide(request)
+
+
+def test_central_agent_decider_uses_reasoning_content_when_vllm_content_is_empty():
+    model = FakeCentralModel(
+        "",
+        reasoning_content='{"action_id":"act-finish","action_type":"FINISH","reason":"done","task":"Completed","metadata":{"allow_without_artifact":true}}',
+    )
+    request = CentralDecisionRequest(
+        system_prompt=CENTRAL_AGENT_ACTION_PROMPT,
+        task_context="<sp-task-context />",
+        state={},
+        iteration=1,
+    )
+
+    action = SPAction.from_dict(CentralAgentDecider(model=model).decide(request))
+
+    assert action.action_id == "act-finish"
+    assert action.action_type == "FINISH"
 
 
 def test_central_agent_decider_selects_final_action_from_noisy_model_output():

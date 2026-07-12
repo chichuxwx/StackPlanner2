@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
+from deerflow.sp.actions.events import make_sp_event
 from deerflow.sp.artifacts import SPArtifactAdapter
 from deerflow.sp.memory import StackMemoryEntry, TaskMemoryStack
 from deerflow.sp.memory.entry import utc_now_iso
@@ -86,14 +87,12 @@ def record_human_feedback(
         state_update=state_update,
         memory_entry=entry,
         run_events=[
-            {
-                "event_type": "sp.human.feedback_received",
-                "action_id": None,
-                "payload": {
-                    "interaction_id": pending.get("interaction_id"),
-                    "feedback_entry_id": entry.id,
-                },
-            }
+            make_sp_event(
+                "sp.human.feedback_received",
+                run_id=run_id,
+                interaction_id=pending.get("interaction_id"),
+                feedback_entry_id=entry.id,
+            )
         ],
     )
 

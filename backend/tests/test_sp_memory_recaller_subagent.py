@@ -14,6 +14,7 @@ def test_memory_recaller_is_registered_as_builtin_subagent():
     assert config.name == "sp-memory-recaller"
     assert config.max_turns == 20
     assert config.internal is True
+    assert config.skills == []
 
 
 def test_memory_recaller_is_read_only_and_cannot_delegate_or_write_files():
@@ -37,9 +38,12 @@ def test_memory_recaller_runtime_chain_includes_read_only_dynamic_context():
     middlewares = build_subagent_runtime_middlewares(
         app_config=app_config,
         agent_name="sp-memory-recaller",
+        memory_agent_name="sp-professor",
     )
 
-    assert sum(isinstance(middleware, DynamicContextMiddleware) for middleware in middlewares) == 1
+    dynamic_context = [middleware for middleware in middlewares if isinstance(middleware, DynamicContextMiddleware)]
+    assert len(dynamic_context) == 1
+    assert dynamic_context[0]._agent_name == "sp-professor"
     assert not any(isinstance(middleware, MemoryMiddleware) for middleware in middlewares)
 
 

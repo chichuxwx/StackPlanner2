@@ -1,12 +1,23 @@
 import type { AnchorHTMLAttributes } from "react";
+import { toast } from "sonner";
 
-import { resolveArtifactURL } from "@/core/artifacts/utils";
+import { downloadArtifact } from "@/core/artifacts/download";
+import {
+  artifactDownloadURL,
+  normalizeArtifactURL,
+} from "@/core/artifacts/utils";
 import { cn } from "@/lib/utils";
 
 import { CitationLink } from "../citations/citation-link";
 
 function isExternalUrl(href: string | undefined): boolean {
   return !!href && /^https?:\/\//.test(href);
+}
+
+function isSafeHref(href: string | undefined): boolean {
+  if (!href) return false;
+  if (href.startsWith("/") || href.startsWith("#")) return true;
+  return /^(https?:|mailto:)/i.test(href);
 }
 
 /**
@@ -21,7 +32,7 @@ export function createMarkdownLinkComponent(threadId?: string) {
   }: AnchorHTMLAttributes<HTMLAnchorElement>) {
     if (typeof props.children === "string") {
       const match = /^citation:(.+)$/.exec(props.children);
-      if (match) {
+      if (match && isSafeHref(href)) {
         const [, text] = match;
         return (
           <CitationLink {...props} href={href}>
@@ -30,22 +41,33 @@ export function createMarkdownLinkComponent(threadId?: string) {
         );
       }
     }
-    if (threadId && href?.startsWith("/mnt/")) {
+    const artifactURL =
+      threadId && href ? normalizeArtifactURL(href, threadId) : null;
+    if (artifactURL) {
+      const filename = decodeURIComponent(
+        artifactURL.split("/").pop()?.split("?")[0] ?? "artifact",
+      );
       return (
         <a
           {...props}
-          href={resolveArtifactURL(href, threadId)}
-          target="_blank"
-          rel="noopener noreferrer"
+          href={artifactDownloadURL(artifactURL)}
+          onClick={(event) => {
+            event.preventDefault();
+            void downloadArtifact({
+              url: artifactDownloadURL(artifactURL),
+              filename,
+            }).catch(() => toast.error("Artifact download failed"));
+          }}
         />
       );
     }
     const { className, target, rel, ...rest } = props;
     const external = isExternalUrl(href);
+    const safeHref = isSafeHref(href) ? href : undefined;
     return (
       <a
         {...rest}
-        href={href}
+        href={safeHref}
         className={cn(
           "text-primary decoration-primary/30 hover:decoration-primary/60 underline underline-offset-2 transition-colors",
           className,

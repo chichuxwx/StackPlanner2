@@ -22,8 +22,19 @@ def resolve_thread_virtual_path(thread_id: str, virtual_path: str) -> Path:
     Raises:
         HTTPException: If the path is invalid or outside allowed directories.
     """
+    paths = get_paths()
+    user_id = get_effective_user_id()
     try:
-        return get_paths().resolve_virtual_path(thread_id, virtual_path, user_id=get_effective_user_id())
+        scoped_path = paths.resolve_virtual_path(thread_id, virtual_path, user_id=user_id)
+        if user_id is not None and not scoped_path.exists():
+            # Keep read access to artifacts created before user-scoped thread
+            # storage was enabled. Ownership is checked by the route decorator
+            # before this resolver runs; this fallback only bridges the legacy
+            # on-disk layout and never changes the validated path root.
+            legacy_path = paths.resolve_virtual_path(thread_id, virtual_path)
+            if legacy_path.exists():
+                return legacy_path
+        return scoped_path
     except ValueError as e:
         status = 403 if "traversal" in str(e) else 400
         raise HTTPException(status_code=status, detail=str(e))

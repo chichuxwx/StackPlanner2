@@ -48,21 +48,21 @@ export function Hero({ className }: { className?: string }) {
         />
       </div>
       <FlickeringGrid
-        className="mask-[url(/images/stackplanner-mark.svg)] mask-size-[88vw] mask-center mask-no-repeat md:mask-size-[62vh] absolute inset-0 z-0 translate-y-8"
+        className="absolute inset-0 z-0 translate-y-8 mask-[url(/images/stackplanner-mark.svg)] mask-size-[88vw] mask-center mask-no-repeat md:mask-size-[62vh]"
         squareSize={4}
         gridGap={4}
         color={"white"}
         maxOpacity={0.3}
         flickerChance={0.25}
       />
-      <div className="container-md relative z-10 mx-auto flex min-h-[92svh] flex-col items-center justify-center px-4 pb-14 pt-20">
-        <h1 className="break-words text-center text-5xl font-bold leading-tight md:text-6xl">
+      <div className="container-md relative z-10 mx-auto flex min-h-[92svh] flex-col items-center justify-center px-4 pt-20 pb-14">
+        <h1 className="text-center text-5xl leading-tight font-bold break-words md:text-6xl">
           <StackPlannerLogo
             className="justify-center gap-3"
             markClassName="size-12 md:size-14"
           />
         </h1>
-        <div className="mt-3 flex w-full min-w-0 max-w-full items-center justify-center gap-x-2 text-center text-2xl font-semibold md:text-4xl">
+        <div className="mt-3 flex w-full max-w-full min-w-0 items-center justify-center gap-x-2 text-center text-2xl font-semibold md:text-4xl">
           <HeroWordRotate words={HERO_WORDS} />
           <span className="whitespace-nowrap">SuperAgent</span>
         </div>
@@ -72,13 +72,13 @@ export function Hero({ className }: { className?: string }) {
             target="_blank"
             rel="noopener noreferrer"
           >
-            <div className="text-shadow-sm mt-4 flex size-fit items-center rounded-lg border border-white px-3 text-center">
+            <div className="mt-4 flex size-fit items-center rounded-lg border border-white px-3 text-center text-shadow-sm">
               <span>In partnership with</span>&nbsp;
               <BytePlusIcon className="h-4" />
             </div>
           </a>
         )}
-        <p className="text-muted-foreground text-shadow-sm mt-8 max-w-4xl text-center text-base leading-7 sm:text-xl md:text-2xl">
+        <p className="text-muted-foreground mt-8 max-w-4xl text-center text-base leading-7 text-shadow-sm sm:text-xl md:text-2xl">
           Explicit task-memory orchestration for long-running research, coding,
           and report workflows, powered by the DeerFlow 2.0 runtime.
         </p>
@@ -111,7 +111,7 @@ function HeroWordRotate({
   }, [words, duration]);
 
   return (
-    <div className="relative min-w-0 max-w-full overflow-hidden py-2">
+    <div className="relative max-w-full min-w-0 overflow-hidden py-2">
       <AnimatePresence mode="popLayout">
         <motion.div
           key={index}
@@ -122,7 +122,7 @@ function HeroWordRotate({
           transition={{ duration: 0.3, ease: "easeOut" }}
         >
           <AuroraText
-            className="max-w-full whitespace-normal [overflow-wrap:anywhere]"
+            className="max-w-full [overflow-wrap:anywhere] whitespace-normal"
             speed={3}
             colors={["#efefbb", "#e9c665", "#e3a812"]}
           >

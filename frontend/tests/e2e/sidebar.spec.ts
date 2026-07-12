@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { mockLangGraphAPI } from "./utils/mock-api";
+import { MOCK_THREAD_ID, mockLangGraphAPI } from "./utils/mock-api";
 
 test.describe("Sidebar navigation", () => {
   test("sidebar contains Chats and Agents nav links", async ({ page }) => {
@@ -28,6 +28,32 @@ test.describe("Sidebar navigation", () => {
 
     await page.waitForURL("**/workspace/agents");
     await expect(page).toHaveURL(/\/workspace\/agents/);
+  });
+
+  test("rename dialog has an accessible description", async ({ page }) => {
+    mockLangGraphAPI(page, {
+      threads: [{ thread_id: MOCK_THREAD_ID, title: "Research draft" }],
+    });
+
+    await page.goto("/workspace/chats/new");
+    const sidebar = page.locator("[data-sidebar='sidebar']");
+    const chatItem = sidebar.getByRole("link", { name: "Research draft" });
+    await expect(chatItem).toBeVisible({ timeout: 15_000 });
+    const menuItem = sidebar
+      .locator("[data-sidebar='menu-item']")
+      .filter({ hasText: "Research draft" });
+    await menuItem.hover();
+    const moreButton = menuItem.getByRole("button", { name: "More" });
+    await expect(moreButton).toBeVisible();
+    await moreButton.click();
+    await page.getByRole("menuitem", { name: "Rename" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Rename" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveAttribute("aria-describedby", /.+/);
+    await expect(dialog).toContainText(
+      "Enter a new name for this conversation.",
+    );
   });
 
   test("Agents button is disabled with a hover tooltip when agents_api is off", async ({

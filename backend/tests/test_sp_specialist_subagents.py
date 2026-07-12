@@ -22,6 +22,7 @@ def test_all_designed_sp_specialists_are_registered():
         assert "Never place a full report or research dump in the summary" in config.system_prompt
         assert "task" in config.disallowed_tools
         assert "ask_clarification" in config.disallowed_tools
+        assert config.skills == []
 
 
 def test_sp_specialists_stay_hidden_from_default_lead_agent_task_tool(monkeypatch):
