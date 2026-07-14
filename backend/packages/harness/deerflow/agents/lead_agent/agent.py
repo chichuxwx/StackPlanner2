@@ -382,7 +382,15 @@ def make_lead_agent(config: RunnableConfig):
     return _make_lead_agent(config, app_config=runtime_app_config or get_app_config())
 
 
-def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
+def _make_lead_agent(
+    config: RunnableConfig,
+    *,
+    app_config: AppConfig,
+    extra_tools: list | None = None,
+    extra_middlewares: list[AgentMiddleware] | None = None,
+    prompt_prefix: str = "",
+    identity_name: str | None = None,
+):
     # Lazy import to avoid circular dependency
     from deerflow.tools import get_available_tools
     from deerflow.tools.builtins import setup_agent, update_agent
@@ -390,6 +398,8 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
 
     cfg = _get_runtime_config(config)
     resolved_app_config = app_config
+    extra_tools = list(extra_tools or [])
+    extra_middlewares = list(extra_middlewares or [])
 
     # Extract user_id for user-scoped skill loading.
     # LangGraph gateway injects user_id into config["configurable"];
@@ -485,13 +495,25 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             enabled=skill_search_enabled,
             container_base_path=container_base_path,
         )
-        raw_tools = get_available_tools(model_name=model_name, subagent_enabled=subagent_enabled, app_config=resolved_app_config) + [setup_agent]
+        raw_tools = get_available_tools(model_name=model_name, subagent_enabled=subagent_enabled, app_config=resolved_app_config) + [setup_agent, *extra_tools]
         filtered = filter_tools_by_skill_allowed_tools(raw_tools, skills_for_tool_policy, always_allowed_tool_names=SKILL_LOADING_TOOL_NAMES)
         if non_interactive:
             filtered = [tool for tool in filtered if tool.name not in _NON_INTERACTIVE_DISABLED_TOOL_NAMES]
         final_tools, setup = assemble_deferred_tools(filtered, enabled=resolved_app_config.tool_search.enabled)
         if skill_setup.describe_skill_tool:
             final_tools.append(skill_setup.describe_skill_tool)
+        bootstrap_prompt = apply_prompt_template(
+            subagent_enabled=subagent_enabled,
+            max_concurrent_subagents=max_concurrent_subagents,
+            available_skills=set(_BOOTSTRAP_SKILL_NAMES),
+            app_config=resolved_app_config,
+            deferred_names=setup.deferred_names,
+            user_id=resolved_user_id,
+            skill_names=skill_setup.skill_names or None,
+            identity_name=identity_name,
+        )
+        if prompt_prefix:
+            bootstrap_prompt = f"{prompt_prefix}\n\n{bootstrap_prompt}"
         return create_agent(
             model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, app_config=resolved_app_config, attach_tracing=False),
             tools=final_tools,
@@ -502,16 +524,9 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
                 app_config=resolved_app_config,
                 deferred_setup=setup,
                 user_id=resolved_user_id,
+                custom_middlewares=extra_middlewares,
             ),
-            system_prompt=apply_prompt_template(
-                subagent_enabled=subagent_enabled,
-                max_concurrent_subagents=max_concurrent_subagents,
-                available_skills=set(_BOOTSTRAP_SKILL_NAMES),
-                app_config=resolved_app_config,
-                deferred_names=setup.deferred_names,
-                user_id=resolved_user_id,
-                skill_names=skill_setup.skill_names or None,
-            ),
+            system_prompt=bootstrap_prompt,
             state_schema=ThreadState,
         )
 
@@ -539,10 +554,12 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     # leave it unset, so ``update_agent`` remains available there.
     channel_name = cfg.get("channel_name")
     is_webhook_channel = channel_name in _WEBHOOK_CHANNELS
-    extra_tools = [update_agent] if agent_name and not is_webhook_channel else []
+    agent_extra_tools = [update_agent] if agent_name and not is_webhook_channel else []
     # Default lead agent (unchanged behavior)
     raw_tools = get_available_tools(model_name=model_name, groups=agent_config.tool_groups if agent_config else None, subagent_enabled=subagent_enabled, app_config=resolved_app_config)
-    filtered = filter_tools_by_skill_allowed_tools(raw_tools + extra_tools, skills_for_tool_policy, always_allowed_tool_names=SKILL_LOADING_TOOL_NAMES)
+    filtered = filter_tools_by_skill_allowed_tools(raw_tools + agent_extra_tools, skills_for_tool_policy, always_allowed_tool_names=SKILL_LOADING_TOOL_NAMES)
+    filtered_names = {tool.name for tool in filtered}
+    filtered.extend(tool for tool in extra_tools if tool.name not in filtered_names)
     if non_interactive:
         filtered = [tool for tool in filtered if tool.name not in _NON_INTERACTIVE_DISABLED_TOOL_NAMES]
     final_tools, setup = assemble_deferred_tools(filtered, enabled=resolved_app_config.tool_search.enabled)
@@ -559,8 +576,9 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             app_config=resolved_app_config,
             deferred_setup=setup,
             user_id=resolved_user_id,
+            custom_middlewares=extra_middlewares,
         ),
-        system_prompt=apply_prompt_template(
+        system_prompt=(f"{prompt_prefix}\n\n" if prompt_prefix else "") + apply_prompt_template(
             subagent_enabled=subagent_enabled,
             max_concurrent_subagents=max_concurrent_subagents,
             agent_name=agent_name,
@@ -569,6 +587,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             deferred_names=setup.deferred_names,
             user_id=resolved_user_id,
             skill_names=skill_setup.skill_names or None,
+            identity_name=identity_name,
         ),
         state_schema=ThreadState,
     )

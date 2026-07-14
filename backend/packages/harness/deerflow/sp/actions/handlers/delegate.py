@@ -45,7 +45,7 @@ class DelegateHandler:
                 error="DELEGATE requires a SP subagent executor",
             )
 
-        if _is_unrequested_report_revision(action, context.state):
+        if _is_unrequested_report_revision(action, context.state, run_id=context.run_id):
             entry = context.stack.append(
                 StackMemoryEntry(
                     thread_id=context.thread_id,
@@ -115,6 +115,17 @@ class DelegateHandler:
         artifact_events: list[dict[str, Any]] = []
         result_ref = result.task_id
         artifact_content = result.artifact_content
+        created_paths = result.artifact_metadata.get("created_paths")
+        virtual_path_hint = None
+        if isinstance(created_paths, list):
+            virtual_path_hint = next(
+                (
+                    path
+                    for path in created_paths
+                    if isinstance(path, str) and path.startswith("/mnt/user-data/outputs/")
+                ),
+                None,
+            )
         if artifact_content is None and isinstance(result.result, str) and len(result.result) > LARGE_RESULT_ARTIFACT_THRESHOLD:
             artifact_content = result.result
         if artifact_content is not None:
@@ -134,6 +145,7 @@ class DelegateHandler:
                 source_entry_id=delegate_entry.id,
                 summary=_compact_result(result.result, fallback="Subagent artifact created"),
                 metadata={"delegate_action_id": action.action_id, **result.artifact_metadata},
+                virtual_path_hint=virtual_path_hint,
             )
             state_update.update(artifact.state_update)
             artifact_refs = artifact.state_update.get("sp_current_artifact_refs", {})
@@ -160,7 +172,6 @@ class DelegateHandler:
                 )
             )
         else:
-            created_paths = result.artifact_metadata.get("created_paths")
             if isinstance(created_paths, list):
                 artifact_state = dict(context.state)
                 registered_paths: list[str] = []
@@ -288,7 +299,7 @@ def _default_artifact_type(target_agent: str) -> str:
     }.get(target_agent, "generated_file")
 
 
-def _is_unrequested_report_revision(action: SPAction, state: Mapping[str, Any]) -> bool:
+def _is_unrequested_report_revision(action: SPAction, state: Mapping[str, Any], *, run_id: str | None = None) -> bool:
     """Prevent model drift from creating report versions without new intent."""
     if action.target_agent != "reporter":
         return False
@@ -300,7 +311,12 @@ def _is_unrequested_report_revision(action: SPAction, state: Mapping[str, Any]) 
         return False
     for key in ("report_revision", "final_report", "report"):
         ref = refs.get(key)
-        if isinstance(ref, dict) and ref.get("artifact_id") and ref.get("is_current", True):
+        if (
+            isinstance(ref, dict)
+            and ref.get("artifact_id")
+            and ref.get("is_current", True)
+            and (not run_id or ref.get("run_id") == run_id)
+        ):
             return True
     return False
 

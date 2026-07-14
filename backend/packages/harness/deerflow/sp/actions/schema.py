@@ -23,6 +23,7 @@ class ActionType(StrEnum):
     DELEGATE = "DELEGATE"
     RECALL_MEMORY = "RECALL_MEMORY"
     REFLECT = "REFLECT"
+    REVISE = "REVISE"
     BACKTRACK = "BACKTRACK"
     REPLAN = "REPLAN"
     SUMMARIZE = "SUMMARIZE"
@@ -179,6 +180,13 @@ class SPAction:
         elif self.action_type == ActionType.RECALL_MEMORY:
             query = self.metadata.get("memory_query") or self.task
             _require_text(query, "metadata.memory_query or task")
+        elif self.action_type == ActionType.REVISE:
+            target_entry_ids = self.metadata.get("target_entry_ids")
+            if not isinstance(target_entry_ids, list) or not target_entry_ids:
+                raise ActionValidationError("metadata.target_entry_ids must be a non-empty list")
+            for entry_id in target_entry_ids:
+                _require_text(entry_id, "metadata.target_entry_ids[]")
+            _require_text(self.task or self.metadata.get("correction"), "task or metadata.correction")
         elif self.action_type == ActionType.BACKTRACK:
             target_type = _require_text(self.metadata.get("backtrack_target_type"), "metadata.backtrack_target_type")
             _require_text(self.metadata.get("backtrack_target_id"), "metadata.backtrack_target_id")

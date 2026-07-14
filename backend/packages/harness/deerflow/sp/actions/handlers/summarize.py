@@ -10,7 +10,10 @@ from deerflow.sp.actions.schema import HandlerResult, SPAction
 class SummarizeHandler:
     def handle(self, action: SPAction, context: HandlerContext) -> HandlerResult:
         source_entry_ids = [str(entry_id) for entry_id in action.metadata.get("source_entry_ids", [])]
+        if not source_entry_ids:
+            source_entry_ids = context.stack.select_explicit_summarization_source_ids()
         summary = str(action.metadata.get("summary") or action.task or action.reason)
+        before_ids = {entry.id for entry in context.stack.entries}
         if source_entry_ids:
             entry = context.stack.condense(
                 source_entry_ids,
@@ -35,12 +38,28 @@ class SummarizeHandler:
             state_update["sp_current_stage"] = action.stage
         events = []
         if source_entry_ids:
+            popped_entry_ids = [
+                entry_id
+                for entry_id in source_entry_ids
+                if entry_id in before_ids and all(existing.id != entry_id for existing in context.stack.entries)
+            ]
+            if popped_entry_ids:
+                events.append(
+                    make_sp_event(
+                        "sp.memory.popped",
+                        action_id=action.action_id,
+                        run_id=context.run_id,
+                        source_entry_ids=popped_entry_ids,
+                        entry_count=len(popped_entry_ids),
+                    )
+                )
             events.append(
                 make_sp_event(
                     "sp.memory.condensed",
                     action_id=action.action_id,
                     run_id=context.run_id,
                     source_entry_ids=source_entry_ids,
+                    popped_entry_ids=popped_entry_ids,
                     summary_entry_id=entry.id,
                 )
             )

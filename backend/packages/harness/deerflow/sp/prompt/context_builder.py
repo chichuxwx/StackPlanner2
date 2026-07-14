@@ -63,17 +63,21 @@ class PromptContextBuilder:
         pending_human_interaction: Mapping[str, Any] | None = None,
         artifact_refs: Mapping[str, Any] | None = None,
         report_version: str | None = None,
+        current_run_id: str | None = None,
     ) -> str:
         """Build the bounded SP context used by CentralAgent decisions."""
         lines = [
             "<sp-task-context>",
             "CentralAgent control context. Use this as task memory, not as tool output.",
             f"current_stage: {current_stage or 'unknown'}",
+            f"current_run_id: {current_run_id or 'unknown'}",
             f"pending_human_interaction: {_json_ref(pending_human_interaction, max_chars=900)}",
             "",
             "priority_rules:",
             "- Critical or pinned human feedback outranks summaries, observations, and model plans.",
             "- Artifact refs point to Workspace/Artifact content; do not infer large artifact bodies from this block.",
+            "- Memory order: critical_feedback and recent_task_memory first; long-term recall is only a fallback for historical reusable facts.",
+            "- Do not call sp_recall_memory when this context already contains the answer to the current task.",
         ]
 
         pinned = self._select_pinned(stack)
@@ -90,7 +94,11 @@ class PromptContextBuilder:
             ]
         )
 
-        recent = self._select_recent(stack, exclude_ids={entry.id for entry in pinned})
+        recent = self._select_recent(
+            stack,
+            exclude_ids={entry.id for entry in pinned},
+            current_run_id=current_run_id,
+        )
         if recent:
             lines.extend(["", "recent_task_memory:"])
             lines.extend(self._format_entries(recent))
@@ -106,8 +114,21 @@ class PromptContextBuilder:
         pinned.sort(key=_entry_priority_rank)
         return pinned[: self.recent_entry_limit]
 
-    def _select_recent(self, stack: TaskMemoryStack, *, exclude_ids: set[str]) -> list[StackMemoryEntry]:
-        active = [entry for entry in stack.get_active_entries() if entry.id not in exclude_ids and entry.status != "pinned" and entry.priority != "critical"]
+    def _select_recent(
+        self,
+        stack: TaskMemoryStack,
+        *,
+        exclude_ids: set[str],
+        current_run_id: str | None = None,
+    ) -> list[StackMemoryEntry]:
+        active = [
+            entry
+            for entry in stack.get_active_entries()
+            if entry.id not in exclude_ids
+            and entry.status != "pinned"
+            and entry.priority != "critical"
+            and (not current_run_id or entry.run_id == current_run_id)
+        ]
         return active[-self.recent_entry_limit :]
 
     def _format_entries(self, entries: Iterable[StackMemoryEntry]) -> list[str]:

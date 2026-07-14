@@ -64,7 +64,7 @@ def test_append_feedback_forces_pinned_critical_even_when_kwargs_disagree():
     assert stack.get_pinned_entries() == [entry]
 
 
-def test_condense_marks_source_entries_without_touching_pinned_feedback():
+def test_condense_pops_source_entries_without_touching_pinned_feedback():
     stack = TaskMemoryStack()
     first = stack.append_think("Initial plan")
     feedback = stack.append_feedback("Keep this feedback")
@@ -72,9 +72,9 @@ def test_condense_marks_source_entries_without_touching_pinned_feedback():
 
     summary = stack.condense([first.id, feedback.id, second.id], "Stage summary")
 
-    assert first.status == "condensed"
+    assert first not in stack.entries
     assert feedback.status == "pinned"
-    assert second.status == "condensed"
+    assert second not in stack.entries
     assert summary.action == "summarize"
     assert summary.parent_ids == [first.id, feedback.id, second.id]
 
@@ -117,10 +117,7 @@ def test_short_term_stack_supports_designed_sp_control_flow():
     finish = stack.append_finish("Short-term memory slice is locally verified")
 
     assert [entry.action for entry in stack.entries] == [
-        "think",
-        "recall_memory",
         "delegate",
-        "observe",
         "feedback",
         "summarize",
         "backtrack",

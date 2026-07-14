@@ -16,6 +16,8 @@ def test_context_prioritizes_pinned_human_feedback_before_recent_memory():
     assert context.index("critical_feedback:") < context.index("recent_task_memory:")
     assert context.index("User requires CentralAgent") < context.index("Try the default")
     assert "priority_rules:" in context
+    assert "Memory order: critical_feedback and recent_task_memory first" in context
+    assert "Do not call sp_recall_memory" in context
 
 
 def test_context_is_bounded_and_clips_entry_content():
@@ -79,3 +81,14 @@ def test_context_renders_critical_feedback_before_large_artifact_refs():
     assert context.endswith("</sp-task-context>")
     assert "Use a conclusion-first structure" in context
     assert context.index("Use a conclusion-first structure") < context.find("current_artifact_refs:") or "current_artifact_refs:" not in context
+
+
+def test_context_scopes_recent_memory_to_current_run():
+    stack = TaskMemoryStack()
+    stack.append_think("Old greeting should stay in history", run_id="run-old")
+    stack.append_think("Current request planning", run_id="run-new")
+
+    context = PromptContextBuilder().build(stack, current_run_id="run-new")
+
+    assert "Current request planning" in context
+    assert "Old greeting should stay in history" not in context

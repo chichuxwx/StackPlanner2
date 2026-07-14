@@ -25,6 +25,9 @@ const config = {
     defaultLocale: "en",
   },
   devIndicators: false,
+  // SP2.0 is reached through Nginx, including via an SSH tunnel at
+  // 127.0.0.1:2027. Allow the proxied dev resources to hydrate correctly.
+  allowedDevOrigins: ["127.0.0.1", "localhost", "123.59.6.244"],
   async headers() {
     return [
       {

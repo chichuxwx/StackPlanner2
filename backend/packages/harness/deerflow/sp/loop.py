@@ -164,6 +164,7 @@ class ActionLoop:
             pending_human_interaction=pending_human,
             artifact_refs=artifact_refs,
             report_version=state.get("sp_current_report_version"),
+            current_run_id=run_id,
         )
         return CentralDecisionRequest(
             system_prompt=self._system_prompt,

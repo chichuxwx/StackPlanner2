@@ -77,6 +77,9 @@ def _normalize_presented_filepath(
     except ValueError as exc:
         raise ValueError(f"Only files in {OUTPUTS_VIRTUAL_PREFIX} can be presented: {filepath}") from exc
 
+    if not actual_path.is_file():
+        raise ValueError(f"Artifact file does not exist: {filepath}")
+
     return f"{OUTPUTS_VIRTUAL_PREFIX}/{relative_path.as_posix()}"
 
 

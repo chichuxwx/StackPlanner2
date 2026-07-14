@@ -40,7 +40,7 @@
 - Prettier。
 - ESLint。
 - TypeScript。
-- Frontend unit：`592 passed`。
+- Frontend unit：`593 passed`。
 - Next.js production build。
 
 当前修改已推送到 `origin/codex/sp-memory-migration`。仓库工作流只在 Pull Request 上触发，原 PR #2 已关闭，因此本轮新 SHA 没有自动创建 Actions run。
@@ -129,10 +129,10 @@
 
 | 范围                           | 结果                                                            |
 | ------------------------------ | --------------------------------------------------------------- |
-| SP/Artifact/Path/RunJournal 回归 | `212 passed`                                                    |
+| SP/Artifact/Path/RunJournal 回归 | `218 passed`                                                    |
 | CentralAgent 动作与长任务矩阵    | 已包含在上项，不能重复相加                                      |
 | DR2 指定回归                   | `321 passed`，1 warning                                         |
-| Frontend unit                  | `592 passed`                                                    |
+| Frontend unit                  | `593 passed`                                                    |
 | Prettier / ESLint / TypeScript | 通过                                                            |
 | Next production build          | 通过，1 Turbopack warning                                       |
 | Gateway health                 | 200                                                             |

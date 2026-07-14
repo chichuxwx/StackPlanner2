@@ -42,12 +42,13 @@ def test_central_agent_decider_parses_action_json_and_uses_bounded_context():
     messages = model.calls[0]
     assert isinstance(messages[0], SystemMessage)
     assert isinstance(messages[1], HumanMessage)
-    assert "do not call business tools directly" in messages[0].content
+    assert "normal agent loop" in messages[0].content
+    assert "sp_delegate" in messages[0].content
     assert "current_stage: planning" in messages[1].content
     assert "Please migrate StackPlanner" in messages[1].content
 
 
-def test_central_agent_decider_rejects_non_json_output():
+def test_central_agent_decider_accepts_free_form_output_for_direct_turns():
     model = FakeCentralModel("I should think first")
     request = CentralDecisionRequest(
         system_prompt=CENTRAL_AGENT_ACTION_PROMPT,
@@ -56,8 +57,10 @@ def test_central_agent_decider_rejects_non_json_output():
         iteration=1,
     )
 
-    with pytest.raises(ValueError, match="JSON object"):
-        CentralAgentDecider(model=model).decide(request)
+    action = SPAction.from_dict(CentralAgentDecider(model=model).decide(request))
+
+    assert action.action_type == "FINISH"
+    assert action.task == "I should think first"
 
 
 def test_central_agent_decider_uses_reasoning_content_when_vllm_content_is_empty():

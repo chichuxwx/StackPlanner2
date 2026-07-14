@@ -285,7 +285,15 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
 
     _warn_unknown_model_settings(model_config.use, model_class, name, model_settings_from_config)
 
-    model_instance = model_class(**kwargs, **model_settings_from_config)
+    # Merge instead of splatting both dictionaries. Some callers pass optional
+    # values such as ``reasoning_effort=None`` while the model config supplies a
+    # provider-specific default (for example ``minimal`` when thinking is off).
+    # Passing both dictionaries directly raises ``multiple values for keyword``.
+    model_init_kwargs = dict(model_settings_from_config)
+    for key, value in kwargs.items():
+        if value is not None or key not in model_init_kwargs:
+            model_init_kwargs[key] = value
+    model_instance = model_class(**model_init_kwargs)
 
     if attach_tracing:
         callbacks = build_tracing_callbacks()

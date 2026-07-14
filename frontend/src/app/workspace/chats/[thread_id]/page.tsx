@@ -27,6 +27,7 @@ import {
   SidecarProvider,
   SidecarTrigger,
 } from "@/components/workspace/sidecar";
+import { SPMemoryTrigger } from "@/components/workspace/sp-memory-trigger";
 import { StackPlannerRuntimeBadge } from "@/components/workspace/stack-planner-runtime-badge";
 import { ThreadScheduledTasksLink } from "@/components/workspace/thread-scheduled-tasks-link";
 import { ThreadTitle } from "@/components/workspace/thread-title";
@@ -275,7 +276,12 @@ export default function ChatPage() {
               <div className="flex min-w-0 flex-1 items-center text-sm font-medium">
                 <ThreadTitle threadId={threadId} thread={thread} />
               </div>
-              <StackPlannerRuntimeBadge />
+              <StackPlannerRuntimeBadge
+                actionType={thread.values.sp_last_handler_result?.action_type}
+                isMock={isMock}
+                threadId={isNewThread ? undefined : threadId}
+              />
+              <SPMemoryTrigger threadId={threadId} />
               <div className="flex shrink-0 items-center gap-2">
                 {!isNewThread && (
                   <ThreadScheduledTasksLink threadId={threadId} />

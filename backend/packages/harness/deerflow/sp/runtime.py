@@ -11,14 +11,11 @@ from typing import Any
 from langchain_core.runnables import RunnableConfig
 from langgraph.runtime import Runtime
 
-from deerflow.agents.middlewares.title_middleware import TitleMiddleware
 from deerflow.config.app_config import AppConfig, get_app_config
-from deerflow.models import create_chat_model
-from deerflow.sp.central import CENTRAL_AGENT_ACTION_PROMPT, create_sp_central_decider
+from deerflow.sp.agent_tools import SPControlActionMiddleware, SPThinkLabelMiddleware, build_sp_control_tools
+from deerflow.sp.central import CENTRAL_AGENT_ACTION_PROMPT
 from deerflow.sp.central.runtime_context import SPCentralRuntimeContext, build_sp_central_runtime_context
-from deerflow.sp.graph import DEFAULT_SP_MAX_ITERATIONS, create_sp_agent_graph
 from deerflow.sp.subagents import DR2SubagentExecutorAdapter, SPSubagentExecutorProtocol, SPSubagentResult, SPSubagentTask
-from deerflow.tracing import build_tracing_callbacks
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +28,16 @@ SP_SUBAGENT_REGISTRY_NAMES = {
     "perception": "sp-perception",
     "memory_recaller": "sp-memory-recaller",
 }
+
+FRESH_USER_TURN_PROMPT = """
+<fresh_user_turn>
+This is a new user turn after the previous run ended abnormally. Treat the current
+user message as authoritative and do not resume the previous unfinished report,
+delegation, search, or tool call unless the user explicitly asks to continue it.
+For greetings and simple questions, answer directly without web search, delegation,
+or repeated internal thinking.
+</fresh_user_turn>
+""".strip()
 
 
 def _runtime_config(config: RunnableConfig) -> dict[str, Any]:
@@ -203,7 +210,12 @@ class _ProgressReportingExecutor:
 
 
 def make_sp_agent(config: RunnableConfig, *, app_config: AppConfig | None = None):
-    """LangGraph-compatible factory used by the existing DR2 Gateway/RunWorker."""
+    """Build one SP CentralAgent using DeerFlow's native agent loop.
+
+    Ordinary DeerFlow tools stay in this graph. SP-specific control methods are
+    added as intercepted tools, so their handlers update the same state and the
+    same model loop without routing through a second CentralAgent.
+    """
     resolved_app_config = app_config or get_app_config()
     runtime = _runtime_config(config)
     from deerflow.runtime.user_context import get_effective_user_id
@@ -226,8 +238,7 @@ def make_sp_agent(config: RunnableConfig, *, app_config: AppConfig | None = None
     thinking_enabled = bool(runtime.get("thinking_enabled", True))
     if model_config is not None and not model_config.supports_thinking:
         thinking_enabled = False
-
-    metadata = config.setdefault("metadata", {})
+    metadata = dict(config.get("metadata") or {})
     metadata.update(
         {
             "agent_name": STACKPLANNER_ASSISTANT_ID,
@@ -238,36 +249,49 @@ def make_sp_agent(config: RunnableConfig, *, app_config: AppConfig | None = None
             "available_skills": sorted(central_context.available_skill_names) if central_context.available_skill_names is not None else None,
         }
     )
-    tracing_callbacks = build_tracing_callbacks()
-    if tracing_callbacks:
-        callbacks = list(config.get("callbacks") or [])
-        config["callbacks"] = [*callbacks, *tracing_callbacks]
-
-    model = create_chat_model(
-        name=model_name,
-        thinking_enabled=thinking_enabled,
-        app_config=resolved_app_config,
-        attach_tracing=False,
+    sp_config = dict(config)
+    configurable = dict(sp_config.get("configurable", {}) or {})
+    configurable.update(
+        {
+            "model_name": model_name,
+            "thinking_enabled": thinking_enabled,
+            "agent_name": central_context.agent_name,
+            "orchestration_mode": STACKPLANNER_ASSISTANT_ID,
+        }
     )
-    max_iterations = int(runtime.get("sp_max_loop_iterations") or DEFAULT_SP_MAX_ITERATIONS)
-    max_iterations = max(1, min(max_iterations, DEFAULT_SP_MAX_ITERATIONS))
-    system_prompt = CENTRAL_AGENT_ACTION_PROMPT
+    sp_config["configurable"] = configurable
+    sp_config["metadata"] = metadata
+
+    executor_provider = DR2SPExecutorProvider(
+        app_config=resolved_app_config,
+        parent_model=model_name,
+        runnable_config=sp_config,
+        available_skill_names=central_context.available_skill_names,
+        memory_agent_name=central_context.agent_name,
+        user_id=user_id,
+    )
+    prompt_sections = [CENTRAL_AGENT_ACTION_PROMPT]
+    if runtime.get("fresh_user_turn_after_terminal"):
+        prompt_sections.append(FRESH_USER_TURN_PROMPT)
     if central_context.system_prompt_section:
-        system_prompt = f"{system_prompt}\n\n{central_context.system_prompt_section}"
-    graph = create_sp_agent_graph(
-        decider=create_sp_central_decider(model=model),
-        system_prompt=system_prompt,
-        decision_context=central_context.decision_context,
-        executor_provider=DR2SPExecutorProvider(
-            app_config=resolved_app_config,
-            parent_model=model_name,
-            runnable_config=config,
-            available_skill_names=central_context.available_skill_names,
-            memory_agent_name=central_context.agent_name,
-            user_id=user_id,
-        ),
-        title_middleware=TitleMiddleware(app_config=resolved_app_config),
-        max_iterations=max_iterations,
+        prompt_sections.append(central_context.system_prompt_section)
+    if central_context.decision_context:
+        prompt_sections.append(central_context.decision_context)
+    from deerflow.agents.lead_agent.agent import _make_lead_agent
+    from deerflow.sp.middlewares import TaskMemoryMiddleware
+    from deerflow.sp.prompt import PromptContextBuilder
+
+    graph = _make_lead_agent(
+        sp_config,
+        app_config=resolved_app_config,
+        extra_tools=build_sp_control_tools(),
+        extra_middlewares=[
+            TaskMemoryMiddleware(context_builder=PromptContextBuilder(), inject_context=True),
+            SPControlActionMiddleware(executor_provider=executor_provider),
+            SPThinkLabelMiddleware(),
+        ],
+        prompt_prefix="\n\n".join(prompt_sections),
+        identity_name="StackPlanner 2.0",
     )
     graph.metadata = dict(metadata)
     return graph

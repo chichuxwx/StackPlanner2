@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 _OUTLINE_PREVIEW_LINES = 5
 _MAX_FILES_PER_CONTEXT_SECTION = 10
 _QUERY_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_CONVERTIBLE_UPLOAD_EXTENSIONS = {".pdf", ".ppt", ".pptx", ".xls", ".xlsx", ".doc", ".docx"}
 
 
 def _extension_label(file: dict) -> str:
@@ -144,6 +145,8 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
         size_str = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{size_kb / 1024:.1f} MB"
         lines.append(f"- {file['filename']} ({size_str})")
         lines.append(f"  Path: {file['path']}")
+        if file.get("converted_from"):
+            lines.append(f"  Read this converted Markdown file; original upload: {file['converted_from']}")
         if file.get("selection_reason") == "query_match":
             lines.append("  Selected because: matched the current query.")
         outline = file.get("outline") or []
@@ -280,15 +283,28 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
                 continue
             if uploads_dir is not None and not (uploads_dir / filename).is_file():
                 continue
-            files.append(
-                {
+            file_info = {
                     "filename": filename,
                     "size": int(f.get("size") or 0),
                     "path": f"/mnt/user-data/uploads/{filename}",
                     "extension": Path(filename).suffix,
                 }
-            )
+            if uploads_dir is not None:
+                self._prefer_converted_markdown(file_info, uploads_dir)
+            files.append(file_info)
         return files if files else None
+
+    @staticmethod
+    def _prefer_converted_markdown(file: dict, uploads_dir: Path) -> None:
+        """Point document entries at generated text that the model can read."""
+        source = uploads_dir / str(file.get("filename") or "")
+        if source.suffix.lower() not in _CONVERTIBLE_UPLOAD_EXTENSIONS:
+            return
+        markdown = source.with_suffix(".md")
+        if not markdown.is_file():
+            return
+        file["converted_from"] = file["filename"]
+        file["path"] = f"/mnt-user-data/uploads/{markdown.name}"
 
     @override
     def before_agent(self, state: UploadsMiddlewareState, runtime: Runtime) -> dict | None:
@@ -343,6 +359,12 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
             for file_path in sorted(uploads_dir.iterdir()):
                 if is_upload_staging_file(file_path.name):
                     continue
+                if file_path.suffix.lower() == ".md" and any(
+                    file_path.with_suffix(extension).is_file() for extension in _CONVERTIBLE_UPLOAD_EXTENSIONS
+                ):
+                    # The original document entry will point at this generated
+                    # Markdown file, avoiding duplicate context entries.
+                    continue
                 if file_path.is_file() and file_path.name not in new_filenames:
                     stat = file_path.stat()
                     historical_candidates.append(
@@ -364,6 +386,7 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
         for file in historical_files:
             file_path = file.pop("_host_path")
             file.pop("_mtime", None)
+            self._prefer_converted_markdown(file, uploads_dir)
             outline, preview = _extract_outline_for_file(file_path)
             file["outline"] = outline
             file["outline_preview"] = preview

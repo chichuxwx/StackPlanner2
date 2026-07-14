@@ -125,6 +125,7 @@ def _context_request(
         pending_human_interaction=pending if isinstance(pending, Mapping) else None,
         artifact_refs=artifact_refs if isinstance(artifact_refs, Mapping) else None,
         report_version=state.get("sp_current_report_version"),
+        current_run_id=run_id,
     )
     if decision_context:
         task_context = f"{decision_context}\n\n{task_context}"
@@ -201,13 +202,35 @@ def _human_input_payload(pending: Mapping[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def _final_artifact_line(state: Mapping[str, Any]) -> str | None:
+def _final_artifact_line(state: Mapping[str, Any], *, run_id: str | None = None) -> str | None:
     refs = state.get("sp_current_artifact_refs")
     if not isinstance(refs, Mapping):
         return None
+    raw_memory = state.get("sp_task_memory")
+    entries = raw_memory.get("entries") if isinstance(raw_memory, Mapping) else None
+    has_current_feedback = bool(
+        run_id
+        and isinstance(entries, list)
+        and any(
+            isinstance(entry, Mapping)
+            and entry.get("action") == "feedback"
+            and entry.get("run_id") == run_id
+            for entry in entries
+        )
+    )
+    state_run_id = state.get("sp_loop_run_id")
     for key in ("final_report", "report_revision", "report", "generated_file", "outline"):
         ref = refs.get(key)
         if not isinstance(ref, Mapping):
+            continue
+        explicit_ref = state.get("sp_last_final_artifact_ref")
+        if (
+            run_id
+            and state_run_id
+            and not has_current_feedback
+            and ref.get("run_id") != run_id
+            and explicit_ref not in {ref.get("artifact_id"), ref.get("artifact_url"), ref.get("virtual_path")}
+        ):
             continue
         label = str(ref.get("summary") or key.replace("_", " ").title())
         url = ref.get("artifact_url")
@@ -272,18 +295,47 @@ def create_sp_agent_graph(
             thread_id=thread_id,
             run_id=run_id,
         )
+        fresh_user_turn = bool(_runtime_context(runtime).get("fresh_user_turn_after_terminal"))
+        if fresh_user_turn:
+            stack = TaskMemoryStack(
+                (
+                    entry
+                    for entry in stack.entries
+                    if entry.status == "pinned"
+                    or entry.priority == "critical"
+                    or (entry.status == "active" and entry.action in {"summarize", "finish"})
+                ),
+                max_size=stack.max_size,
+            )
         update: dict[str, Any] = {
             "sp_task_memory": stack.to_dict(),
             "sp_current_action": None,
             "sp_current_action_id": None,
             "sp_max_loop_iterations": max_iterations,
         }
-        if run_id and state.get("sp_loop_run_id") != run_id:
+        if fresh_user_turn:
+            update.update(
+                {
+                    "sp_pending_human_interaction": None,
+                    "sp_current_artifact_refs": None,
+                    "sp_current_report_version": None,
+                }
+            )
+        is_new_run = bool(run_id and state.get("sp_loop_run_id") != run_id)
+        if is_new_run:
             update.update(
                 {
                     "sp_loop_run_id": run_id,
                     "sp_loop_iteration": 0,
                     "sp_decision_attempts": 0,
+                    "sp_last_handler_result": None,
+                    "sp_last_action_id": None,
+                    "sp_last_idempotency_key": None,
+                    "sp_current_action": None,
+                    "sp_current_action_id": None,
+                    "sp_active_delegate_id": None,
+                    "sp_last_run_summary": None,
+                    "sp_last_final_artifact_ref": None,
                 }
             )
 
@@ -315,6 +367,13 @@ def create_sp_agent_graph(
                 )
                 update.update(feedback_result.state_update)
                 events.extend(feedback_result.run_events)
+        if is_new_run and not any(event.get("event_type") == "sp.human.feedback_received" for event in events):
+            update.update(
+                {
+                    "sp_current_stage": "perception",
+                    "sp_current_report_version": None,
+                }
+            )
         _emit_events(runtime, events)
         return update
 
@@ -517,7 +576,7 @@ def create_sp_agent_graph(
 
     def final_response(state: ThreadState, runtime: Runtime) -> dict[str, Any]:
         content = str(state.get("sp_last_run_summary") or "Task completed.").strip()
-        artifact_line = _final_artifact_line(state)
+        artifact_line = _final_artifact_line(state, run_id=_runtime_id(runtime, "run_id"))
         if artifact_line and artifact_line not in content:
             content = f"{content}\n\n{artifact_line}"
         action_id = str(state.get("sp_last_action_id") or "finish")

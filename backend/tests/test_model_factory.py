@@ -207,6 +207,36 @@ def test_thinking_disabled_openai_gateway_format(monkeypatch):
     assert "thinking" not in captured  # must NOT set the direct thinking param
 
 
+def test_thinking_disabled_ignores_optional_none_reasoning_effort(monkeypatch):
+    """A caller's omitted reasoning effort must not collide with the disable default."""
+    wte = {"extra_body": {"thinking": {"type": "enabled"}}}
+    cfg = _make_app_config(
+        [
+            _make_model(
+                "openai-gw-none-effort",
+                supports_thinking=True,
+                supports_reasoning_effort=True,
+                when_thinking_enabled=wte,
+            )
+        ]
+    )
+    _patch_factory(monkeypatch, cfg)
+
+    captured: dict = {}
+
+    class CapturingModel(FakeChatModel):
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            BaseChatModel.__init__(self, **kwargs)
+
+    monkeypatch.setattr(factory_module, "resolve_class", lambda path, base: CapturingModel)
+
+    factory_module.create_chat_model(name="openai-gw-none-effort", thinking_enabled=False, reasoning_effort=None)
+
+    assert captured.get("reasoning_effort") == "minimal"
+    assert captured.get("extra_body") == {"thinking": {"type": "disabled"}}
+
+
 def test_thinking_disabled_langchain_anthropic_format(monkeypatch):
     """When thinking is configured as a direct param (langchain_anthropic),
     disabling must inject thinking.type=disabled WITHOUT touching extra_body or reasoning_effort."""

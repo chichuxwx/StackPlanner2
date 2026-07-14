@@ -55,6 +55,26 @@ DAEMON_MODE=false
 SKIP_INSTALL=false
 ACTION="start"   # start | stop | restart
 
+# Allow parallel worktrees or an existing DeerFlow instance to use different
+# ports while preserving the documented defaults.
+GATEWAY_PORT="${GATEWAY_PORT:-8001}"
+FRONTEND_PORT="${FRONTEND_PORT:-3000}"
+NGINX_PORT="${NGINX_PORT:-2026}"
+for _port_name in GATEWAY_PORT FRONTEND_PORT NGINX_PORT; do
+    _port_value="${!_port_name}"
+    if ! [[ "$_port_value" =~ ^[0-9]+$ ]] || [ "$_port_value" -lt 1 ] || [ "$_port_value" -gt 65535 ]; then
+        echo "Invalid $_port_name=$_port_value; expected a TCP port in [1, 65535]." >&2
+        exit 1
+    fi
+done
+NGINX_CONFIG="$REPO_ROOT/logs/nginx.local.generated.conf"
+
+# The Next.js server performs SSR auth checks and API rewrites directly to the
+# Gateway. When alternate ports are used, keep that internal route aligned
+# with the selected Gateway instead of falling back to 127.0.0.1:8001.
+export DEER_FLOW_INTERNAL_GATEWAY_BASE_URL="${DEER_FLOW_INTERNAL_GATEWAY_BASE_URL:-http://127.0.0.1:$GATEWAY_PORT}"
+export DEER_FLOW_TRUSTED_ORIGINS="${DEER_FLOW_TRUSTED_ORIGINS:-http://localhost:$NGINX_PORT,http://127.0.0.1:$NGINX_PORT}"
+
 for arg in "$@"; do
     case "$arg" in
         --dev)     DEV_MODE=true ;;
@@ -119,7 +139,7 @@ _is_deerflow_pid() {
 # (or starting, which stops first) isn't silently killing someone else's run.
 _report_reclaimed_ports() {
     local port pid files root owner
-    for port in 8001 3000 2026; do
+    for port in "$GATEWAY_PORT" "$FRONTEND_PORT" "$NGINX_PORT"; do
         for pid in $(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null); do
             _is_deerflow_pid "$pid" || continue
             files=$(lsof -b -w -p "$pid" 2>/dev/null)
@@ -254,16 +274,16 @@ stop_all() {
     _kill_repo_processes "next dev"
     _kill_repo_processes "next start"
     _kill_repo_processes "next-server"
-    nginx -c "$REPO_ROOT/docker/nginx/nginx.local.conf" -p "$REPO_ROOT" -s quit 2>/dev/null || true
+    nginx -c "$NGINX_CONFIG" -p "$REPO_ROOT" -s quit 2>/dev/null || true
     sleep 1
     _kill_repo_nginx
     # Force-kill any survivors still holding the service ports. 2026 is included
     # so a lingering nginx (or any deer-flow process) that _kill_repo_nginx did
     # not match by name still gets reclaimed — otherwise `make dev` fails its
     # nginx port preflight.
-    _kill_repo_port 8001
-    _kill_repo_port 3000
-    _kill_repo_port 2026
+    _kill_repo_port "$GATEWAY_PORT"
+    _kill_repo_port "$FRONTEND_PORT"
+    _kill_repo_port "$NGINX_PORT"
     ./scripts/cleanup-containers.sh deer-flow-sandbox 2>/dev/null || true
     echo "✓ All services stopped"
 }
@@ -295,13 +315,13 @@ fi
 
 # Frontend command
 if $DEV_MODE; then
-    FRONTEND_CMD="pnpm run dev"
+    FRONTEND_CMD="pnpm exec next dev --turbo --port $FRONTEND_PORT"
 else
     if ! PYTHON_BIN="$(_pick_python)"; then
         echo "Python is required to generate BETTER_AUTH_SECRET."
         exit 1
     fi
-    FRONTEND_CMD="env BETTER_AUTH_SECRET=$($PYTHON_BIN -c 'import secrets; print(secrets.token_hex(16))') pnpm run preview"
+    FRONTEND_CMD="env BETTER_AUTH_SECRET=$($PYTHON_BIN -c 'import secrets; print(secrets.token_hex(16))') sh -c 'pnpm exec next build && exec pnpm exec next start --port $FRONTEND_PORT'"
 fi
 
 # Runtime path defaults. Local `make dev` launches Gateway from `backend/`,
@@ -402,9 +422,9 @@ echo ""
 echo "  Mode: $MODE_LABEL"
 echo ""
 echo "  Services:"
-echo "    Gateway     → localhost:8001  (REST API + agent runtime)"
-echo "    Frontend    → localhost:3000  (Next.js)"
-echo "    Nginx       → localhost:2026  (reverse proxy)"
+    echo "    Gateway     → localhost:$GATEWAY_PORT  (REST API + agent runtime)"
+    echo "    Frontend    → localhost:$FRONTEND_PORT  (Next.js)"
+    echo "    Nginx       → localhost:$NGINX_PORT  (reverse proxy)"
 echo ""
 
 # ── Cleanup handler ──────────────────────────────────────────────────────────
@@ -457,20 +477,29 @@ run_service() {
 mkdir -p logs
 mkdir -p temp/client_body_temp temp/proxy_temp temp/fastcgi_temp temp/uwsgi_temp temp/scgi_temp
 
+# Render the checked-in routing config with the selected local ports. This
+# keeps the config reusable for both the default and parallel-worktree cases.
+sed \
+    -e "s/127\.0\.0\.1:8001/127.0.0.1:$GATEWAY_PORT/g" \
+    -e "s/127\.0\.0\.1:3000/127.0.0.1:$FRONTEND_PORT/g" \
+    -e "s/listen 2026;/listen $NGINX_PORT;/g" \
+    -e "s/listen \[::\]:2026;/listen [::]:$NGINX_PORT;/g" \
+    "$REPO_ROOT/docker/nginx/nginx.local.conf" > "$NGINX_CONFIG"
+
 # 1. Gateway API
 run_service "Gateway" \
-    "cd backend && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 $GATEWAY_EXTRA_FLAGS > ../logs/gateway.log 2>&1" \
-    8001 30
+    "cd backend && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port $GATEWAY_PORT $GATEWAY_EXTRA_FLAGS > ../logs/gateway.log 2>&1" \
+    "$GATEWAY_PORT" 30
 
 # 2. Frontend
 run_service "Frontend" \
     "cd frontend && $FRONTEND_CMD > ../logs/frontend.log 2>&1" \
-    3000 120
+    "$FRONTEND_PORT" 120
 
 # 3. Nginx
 run_service "Nginx" \
-    "nginx -g 'daemon off;' -c '$REPO_ROOT/docker/nginx/nginx.local.conf' -p '$REPO_ROOT' > logs/nginx.log 2>&1" \
-    2026 10
+    "nginx -g 'daemon off;' -c '$NGINX_CONFIG' -p '$REPO_ROOT' > logs/nginx.log 2>&1" \
+    "$NGINX_PORT" 10
 
 # ── Ready ────────────────────────────────────────────────────────────────────
 
@@ -479,11 +508,11 @@ echo "=========================================="
 echo "  ✓ DeerFlow is running!  [$MODE_LABEL]"
 echo "=========================================="
 echo ""
-echo "  🌐 http://localhost:2026"
+echo "  🌐 http://localhost:$NGINX_PORT"
 echo ""
 echo "  Routing: Frontend → Nginx → Gateway"
 echo "  API:     /api/langgraph/*  →  Gateway agent runtime"
-echo "           /api/*              →  Gateway REST API (8001)"
+echo "           /api/*              →  Gateway REST API ($GATEWAY_PORT)"
 echo ""
 echo "  📋 Logs: logs/{gateway,frontend,nginx}.log"
 echo ""

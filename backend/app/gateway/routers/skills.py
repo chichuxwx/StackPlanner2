@@ -131,6 +131,18 @@ def _get_user_skill_storage(config: AppConfig) -> SkillStorage:
     return get_or_new_user_skill_storage(get_effective_user_id(), app_config=config)
 
 
+async def _load_user_skills(config: AppConfig, *, enabled_only: bool = False) -> list[Skill]:
+    """Load skill metadata without blocking the gateway event loop.
+
+    SkillStorage walks and parses SKILL.md files synchronously.  The endpoint
+    is async and is also used while a long-running agent stream is active, so a
+    direct call here can stall unrelated requests (including the SSE stream)
+    long enough for nginx to return a 504.
+    """
+    storage = _get_user_skill_storage(config)
+    return await asyncio.to_thread(storage.load_skills, enabled_only=enabled_only)
+
+
 @router.get(
     "/skills",
     response_model=SkillsListResponse,
@@ -140,7 +152,7 @@ def _get_user_skill_storage(config: AppConfig) -> SkillStorage:
 async def list_skills(config: AppConfig = Depends(get_config)) -> SkillsListResponse:
     try:
         # Use user-scoped storage: loads public (global) + custom (user-level + fallback)
-        skills = _get_user_skill_storage(config).load_skills(enabled_only=False)
+        skills = await _load_user_skills(config, enabled_only=False)
         return SkillsListResponse(skills=[_skill_to_response(skill) for skill in skills])
     except Exception as e:
         logger.error(f"Failed to load skills: {e}", exc_info=True)
@@ -194,7 +206,7 @@ async def list_custom_skills(config: AppConfig = Depends(get_config)) -> SkillsL
     skills including legacy ones.
     """
     try:
-        skills = [skill for skill in _get_user_skill_storage(config).load_skills(enabled_only=False) if skill.category == SkillCategory.CUSTOM]
+        skills = [skill for skill in await _load_user_skills(config, enabled_only=False) if skill.category == SkillCategory.CUSTOM]
         return SkillsListResponse(skills=[_skill_to_response(skill) for skill in skills])
     except Exception as e:
         logger.error("Failed to list custom skills: %s", e, exc_info=True)
@@ -211,7 +223,7 @@ async def _read_custom_skill_response(skill_name: str, config: AppConfig) -> Cus
     try:
         skill_name = skill_name.replace("\r\n", "").replace("\n", "")
         storage = _get_user_skill_storage(config)
-        skills = storage.load_skills(enabled_only=False)
+        skills = await _load_user_skills(config, enabled_only=False)
         skill = next((s for s in skills if s.name == skill_name and s.category == SkillCategory.CUSTOM), None)
         if skill is None:
             raise HTTPException(status_code=404, detail=f"Custom skill '{skill_name}' not found")
@@ -365,7 +377,7 @@ async def rollback_custom_skill(skill_name: str, body: SkillRollbackRequest, req
 async def get_skill(skill_name: str, config: AppConfig = Depends(get_config)) -> SkillResponse:
     try:
         skill_name = skill_name.replace("\r\n", "").replace("\n", "")
-        skills = _get_user_skill_storage(config).load_skills(enabled_only=False)
+        skills = await _load_user_skills(config, enabled_only=False)
         skill = next((s for s in skills if s.name == skill_name), None)
 
         if skill is None:
@@ -394,7 +406,7 @@ async def update_skill(skill_name: str, body: SkillUpdateRequest, request: Reque
     try:
         skill_name = skill_name.replace("\r\n", "").replace("\n", "")
         storage = _get_user_skill_storage(config)
-        skills = storage.load_skills(enabled_only=False)
+        skills = await _load_user_skills(config, enabled_only=False)
         skill = next((s for s in skills if s.name == skill_name), None)
 
         if skill is None:
@@ -456,7 +468,7 @@ async def update_skill(skill_name: str, body: SkillUpdateRequest, request: Reque
         else:
             await refresh_user_skills_system_prompt_cache_async(get_effective_user_id())
 
-        skills = _get_user_skill_storage(config).load_skills(enabled_only=False)
+        skills = await _load_user_skills(config, enabled_only=False)
         updated_skill = next((s for s in skills if s.name == skill_name), None)
 
         if updated_skill is None:
