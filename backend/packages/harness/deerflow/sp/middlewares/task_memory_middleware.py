@@ -13,7 +13,7 @@ from typing import Any, override
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelCallResult, ModelRequest, ModelResponse
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.config import get_config
 from langgraph.runtime import Runtime
 
@@ -93,10 +93,17 @@ class TaskMemoryMiddleware(AgentMiddleware[ThreadState]):
         return await handler(self._augment_request(request))
 
     def _augment_request(self, request: ModelRequest) -> ModelRequest:
-        if not self._inject_context:
-            return request
         messages = getattr(request, "messages", None)
         if not isinstance(messages, list):
+            return request
+        if _is_fresh_user_turn(request):
+            # Drop the abandoned tool-call transcript, but still inject the
+            # compact SP task context retained for the new user turn.
+            request = request.override(messages=_isolate_fresh_turn_messages(messages))
+            messages = getattr(request, "messages", None)
+            if not isinstance(messages, list):
+                return request
+        if not self._inject_context:
             return request
         if _has_task_context_message(messages):
             return request
@@ -177,6 +184,29 @@ def _has_context_refs(state: Mapping[str, Any]) -> bool:
 
 def _has_task_context_message(messages: list[BaseMessage]) -> bool:
     return any(getattr(message, "name", None) == SP_TASK_CONTEXT_MESSAGE_NAME for message in messages)
+
+
+def _is_fresh_user_turn(request: ModelRequest) -> bool:
+    runtime = getattr(request, "runtime", None)
+    context = getattr(runtime, "context", None)
+    return isinstance(context, Mapping) and bool(context.get("fresh_user_turn_after_terminal"))
+
+
+def _isolate_fresh_turn_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """Keep the current prompt while dropping an abandoned tool-call history."""
+    latest_human = next(
+        (
+            message
+            for message in reversed(messages)
+            if isinstance(message, HumanMessage)
+            and getattr(message, "name", None) != SP_TASK_CONTEXT_MESSAGE_NAME
+        ),
+        None,
+    )
+    if latest_human is None:
+        return messages
+    system_messages = [message for message in messages if isinstance(message, SystemMessage)]
+    return [*system_messages, latest_human]
 
 
 def _insert_before_last_human(messages: list[BaseMessage], context_message: HumanMessage) -> list[BaseMessage]:

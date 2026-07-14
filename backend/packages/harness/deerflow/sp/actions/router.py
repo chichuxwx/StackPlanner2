@@ -6,7 +6,19 @@ from collections.abc import Mapping
 from typing import Any
 
 from deerflow.sp.actions.events import make_sp_event
-from deerflow.sp.actions.handlers import AskHumanHandler, BacktrackHandler, DelegateHandler, FinishHandler, HandlerContext, MemoryRecallHandler, ReflectHandler, ReplanHandler, SummarizeHandler, ThinkHandler
+from deerflow.sp.actions.handlers import (
+    AskHumanHandler,
+    BacktrackHandler,
+    DelegateHandler,
+    FinishHandler,
+    HandlerContext,
+    MemoryRecallHandler,
+    ReflectHandler,
+    ReplanHandler,
+    ReviseHandler,
+    SummarizeHandler,
+    ThinkHandler,
+)
 from deerflow.sp.actions.handlers.base import BaseActionHandler
 from deerflow.sp.actions.schema import ActionType, ActionValidationError, HandlerResult, SPAction
 from deerflow.sp.artifacts import SPArtifactAdapter
@@ -339,6 +351,7 @@ def build_default_action_router(
     handlers: dict[ActionType, BaseActionHandler] = {
         ActionType.THINK: ThinkHandler(),
         ActionType.REFLECT: ReflectHandler(),
+        ActionType.REVISE: ReviseHandler(),
         ActionType.BACKTRACK: BacktrackHandler(),
         ActionType.REPLAN: ReplanHandler(),
         ActionType.SUMMARIZE: SummarizeHandler(),

@@ -552,6 +552,7 @@ You: "Deploying to staging..." [proceed]
 - Uploaded files are automatically listed in the <uploaded_files> section before each request
 - Use `read_file` tool to read uploaded files using their paths from the list
 - For PDF, PPT, Excel, and Word files, converted Markdown versions (*.md) are available alongside originals
+- For questions about an uploaded document, read the converted Markdown file locally before using `web_search`; do not search the web for details already present in the upload.
 - All temporary work happens in `/mnt/user-data/workspace`
 - Treat `/mnt/user-data/workspace` as your default current working directory for coding and file-editing tasks
 - When writing scripts or commands that create/read files from the workspace, prefer relative paths such as `hello.txt`, `../uploads/data.csv`, and `../outputs/report.md`
@@ -756,6 +757,7 @@ def get_skills_prompt_section(
     app_config: AppConfig | None = None,
     user_id: str | None = None,
     skill_names: frozenset[str] | None = None,
+    identity_name: str | None = None,
 ) -> str:
     """Generate the skills prompt section.
 
@@ -904,6 +906,7 @@ def apply_prompt_template(
     deferred_names: frozenset[str] = frozenset(),
     user_id: str | None = None,
     skill_names: frozenset[str] | None = None,
+    identity_name: str | None = None,
 ) -> str:
     # Include subagent section only if enabled (from runtime parameter)
     n = max_concurrent_subagents
@@ -956,7 +959,7 @@ def apply_prompt_template(
     # as a <system-reminder> in the first HumanMessage, keeping this prompt
     # identical across users and sessions for maximum prefix-cache reuse.
     return SYSTEM_PROMPT_TEMPLATE.format(
-        agent_name=agent_name or "DeerFlow 2.0",
+        agent_name=identity_name or agent_name or "DeerFlow 2.0",
         soul=get_agent_soul(agent_name),
         self_update_section=_build_self_update_section(agent_name),
         skills_section=skills_section,

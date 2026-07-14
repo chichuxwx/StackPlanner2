@@ -8,6 +8,7 @@ from deerflow.sp.actions.handlers.human import AskHumanHandler
 from deerflow.sp.actions.handlers.memory_recall import MemoryRecallHandler
 from deerflow.sp.actions.handlers.reflect import ReflectHandler
 from deerflow.sp.actions.handlers.replan import ReplanHandler
+from deerflow.sp.actions.handlers.revise import ReviseHandler
 from deerflow.sp.actions.handlers.summarize import SummarizeHandler
 from deerflow.sp.actions.handlers.think import ThinkHandler
 
@@ -21,6 +22,7 @@ __all__ = [
     "MemoryRecallHandler",
     "ReflectHandler",
     "ReplanHandler",
+    "ReviseHandler",
     "SummarizeHandler",
     "ThinkHandler",
 ]

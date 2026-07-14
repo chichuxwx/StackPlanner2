@@ -107,6 +107,26 @@ def test_wrap_model_call_skips_empty_context():
     assert captured[0] is request
 
 
+def test_wrap_model_call_keeps_compact_summary_on_fresh_user_turn():
+    stack = TaskMemoryStack()
+    stack.append_summary("Previous task completed; report artifact is ready.", stage="finished")
+    state = {"sp_task_memory": stack.to_dict(), "sp_current_stage": "finished"}
+    request = _make_request(
+        messages=[AIMessage(content="Previous answer"), HumanMessage(content="What did we decide?")],
+        state=state,
+    )
+    request.runtime.context["fresh_user_turn_after_terminal"] = True
+    captured, handler = _capture_handler()
+
+    TaskMemoryMiddleware().wrap_model_call(request, handler)
+
+    sent = captured[0]
+    assert len(sent.messages) == 2
+    assert sent.messages[-1].content == "What did we decide?"
+    assert sent.messages[-2].name == SP_TASK_CONTEXT_MESSAGE_NAME
+    assert "Previous task completed" in sent.messages[-2].content
+
+
 def test_after_agent_prunes_active_entries_but_preserves_pinned_feedback():
     stack = TaskMemoryStack()
     stack.append_think("Old normal entry")

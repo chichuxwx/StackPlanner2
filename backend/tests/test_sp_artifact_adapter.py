@@ -172,6 +172,9 @@ def test_write_text_artifact_requires_dr2_thread_context_when_no_outputs_path():
 
 def test_register_existing_output_file_creates_ref_without_copying_body(tmp_path):
     adapter = SPArtifactAdapter()
+    output_file = tmp_path / "threads" / "thread-1" / "user-data" / "outputs" / "generated" / "app.py"
+    output_file.parent.mkdir(parents=True)
+    output_file.write_text("print('ok')", encoding="utf-8")
     result = adapter.register_existing_artifact(
         "/mnt/user-data/outputs/generated/app.py",
         artifact_type="generated_file",
@@ -186,6 +189,16 @@ def test_register_existing_output_file_creates_ref_without_copying_body(tmp_path
     assert ref["artifact_url"] == "/api/threads/thread-1/artifacts/mnt/user-data/outputs/generated/app.py"
     assert ref["metadata"]["registered_existing_file"] is True
     assert result.state_update["artifacts"] == ["/mnt/user-data/outputs/generated/app.py"]
+
+
+def test_register_existing_output_file_rejects_missing_file(tmp_path):
+    with pytest.raises(ValueError, match="does not exist"):
+        SPArtifactAdapter().register_existing_artifact(
+            "/mnt/user-data/outputs/generated/missing.py",
+            artifact_type="generated_file",
+            state=_state(tmp_path),
+            thread_id="thread-1",
+        )
 
 
 @pytest.mark.parametrize(

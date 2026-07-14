@@ -7,7 +7,10 @@ import { getGatewayConfig } from "./gateway-config";
 import { STATIC_WEBSITE_USER } from "./static-user";
 import { type AuthResult, userSchema } from "./types";
 
-const SSR_AUTH_TIMEOUT_MS = 5_000;
+// Gateway requests can briefly queue behind a long-running agent task. Keep
+// the auth probe bounded, but avoid treating a short burst of gateway load as
+// a logged-out session.
+const SSR_AUTH_TIMEOUT_MS = 15_000;
 
 /**
  * Fetch the authenticated user from the gateway using the request's cookies.
@@ -96,7 +99,11 @@ export async function getServerSideUser(): Promise<AuthResult> {
     return { tag: "gateway_unavailable" };
   } catch (err) {
     clearTimeout(timeout);
-    console.error("[SSR auth] Failed to reach gateway:", err);
+    if (err instanceof Error && err.name === "AbortError") {
+      console.warn("[SSR auth] Gateway auth probe timed out");
+    } else {
+      console.error("[SSR auth] Failed to reach gateway:", err);
+    }
     return { tag: "gateway_unavailable" };
   }
 }

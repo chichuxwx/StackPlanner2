@@ -328,13 +328,35 @@ def test_summarize_handler_condenses_sources_without_touching_pinned_feedback():
     restored = TaskMemoryStack.from_dict(result.state_update["sp_task_memory"])
 
     by_id = {entry.id: entry for entry in restored.entries}
-    assert by_id[first.id].status == "condensed"
+    assert first.id not in by_id
     assert by_id[feedback.id].status == "pinned"
-    assert by_id[second.id].status == "condensed"
+    assert second.id not in by_id
     assert restored.entries[-1].action == "summarize"
+    popped_event = next(event for event in result.run_events if event["event_type"] == "sp.memory.popped")
+    assert popped_event["payload"]["source_entry_ids"] == [first.id, second.id]
     condensed_event = next(event for event in result.run_events if event["event_type"] == "sp.memory.condensed")
     assert condensed_event["payload"]["source_entry_ids"] == [first.id, feedback.id, second.id]
+    assert condensed_event["payload"]["popped_entry_ids"] == [first.id, second.id]
     assert condensed_event["payload"]["summary_entry_id"] == restored.entries[-1].id
+
+
+def test_summarize_handler_without_source_ids_pops_all_active_noncritical_entries():
+    stack = TaskMemoryStack()
+    first = stack.append_think("old plan")
+    feedback = stack.append_feedback("Pinned feedback")
+    second = stack.append_observe("research", actor="researcher")
+
+    result = build_default_action_router().execute(
+        _action(ActionType.SUMMARIZE, action_id="act-summary-fallback", task="Condensed result"),
+        state={"sp_task_memory": stack.to_dict()},
+    )
+    restored = TaskMemoryStack.from_dict(result.state_update["sp_task_memory"])
+    ids = {entry.id for entry in restored.entries}
+
+    assert first.id not in ids
+    assert second.id not in ids
+    assert feedback.id in ids
+    assert restored.entries[-1].action == "summarize"
 
 
 def test_backtrack_marks_entries_after_target_and_preserves_artifact_history():
@@ -373,6 +395,57 @@ def test_backtrack_marks_entries_after_target_and_preserves_artifact_history():
     assert result.state_update["sp_current_artifact_refs"]["report"]["artifact_id"] == "new"
     assert restored.entries[-1].action == "backtrack"
     assert any(event["event_type"] == "sp.memory.backtracked" for event in result.run_events)
+
+
+def test_revise_supersedes_wrong_memory_and_appends_corrected_memory():
+    stack = TaskMemoryStack()
+    wrong_plan = stack.append_think("Use an unofficial source", stage="research")
+    wrong_observation = stack.append_observe("The result is confirmed", actor="deerflow", stage="research")
+    state = {"sp_task_memory": stack.to_dict()}
+    action = _action(
+        ActionType.REVISE,
+        action_id="act-revise",
+        task="Use the official source and mark the result as unverified until checked.",
+        stage="verification",
+        metadata={
+            "target_entry_ids": [wrong_plan.id, wrong_observation.id],
+            "revision_reason": "The source was not authoritative and the result was not independently verified.",
+        },
+    )
+
+    result = build_default_action_router().execute(action, state=state, thread_id="thread-1", run_id="run-1")
+
+    restored = TaskMemoryStack.from_dict(result.state_update["sp_task_memory"])
+    by_id = {entry.id: entry for entry in restored.entries}
+    correction = restored.entries[-1]
+    assert result.next_step == "continue"
+    assert by_id[wrong_plan.id].status == "superseded"
+    assert by_id[wrong_observation.id].status == "superseded"
+    assert correction.action == "revise"
+    assert correction.parent_ids == [wrong_plan.id, wrong_observation.id]
+    assert correction.status == "active"
+    assert [entry.id for entry in restored.get_active_entries()] == [correction.id]
+    assert result.state_update["sp_current_stage"] == "verification"
+    assert any(event["event_type"] == "sp.memory.revised" for event in result.run_events)
+
+
+def test_revise_cannot_pop_pinned_human_feedback():
+    stack = TaskMemoryStack()
+    feedback = stack.append_feedback("The final answer must use the requested format.")
+    action = _action(
+        ActionType.REVISE,
+        action_id="act-revise-feedback",
+        task="Ignore the requested format.",
+        metadata={"target_entry_ids": [feedback.id]},
+    )
+
+    result = build_default_action_router().execute(action, state={"sp_task_memory": stack.to_dict()})
+
+    assert result.next_step == "error_recoverable"
+    assert "pinned or critical" in result.error
+    restored = TaskMemoryStack.from_dict(result.state_update["sp_task_memory"])
+    assert restored.entries[0].status == "pinned"
+    assert len(restored.entries) == 1
 
 
 def test_backtrack_restores_artifact_current_version_and_emits_change_event():
@@ -794,6 +867,10 @@ def test_delegate_handler_defensively_externalizes_large_unstructured_result(tmp
 
 
 def test_delegate_handler_registers_coder_created_output_paths_as_artifacts(tmp_path):
+    outputs_dir = tmp_path / "threads" / "thread-1" / "user-data" / "outputs" / "generated"
+    outputs_dir.mkdir(parents=True)
+    (outputs_dir / "module.py").write_text("print('module')", encoding="utf-8")
+    (outputs_dir / "test_module.py").write_text("def test_module(): pass", encoding="utf-8")
     executor = FakeSubagentExecutor(
         SPSubagentResult(
             status=SPSubagentStatus.COMPLETED,
@@ -923,20 +1000,14 @@ def test_router_resets_loop_budget_when_dr2_run_id_changes():
     assert result.state_update["sp_loop_run_id"] == "new-run"
 
 
-def test_central_prompt_enforces_action_json_and_no_direct_tools():
+def test_central_prompt_exposes_sp_controls_without_forcing_json_actions():
     prompt = CENTRAL_AGENT_ACTION_PROMPT
 
-    assert "Return JSON only" in prompt
-    assert "do not call business tools directly" in prompt
-    assert "search" in prompt
-    assert "bash" in prompt
-    assert "FINISH requires no pending human interaction" in prompt
-    assert "allow_without_artifact=true" in prompt
-    assert "handler routes to memory_recaller" in prompt
-    assert "Do not repeatedly emit THINK" in prompt
-    assert "After BACKTRACK, choose REPLAN" in prompt
-    assert "do not DELEGATE reporter again" in prompt
-    assert "only when the next work requires a specialist" in prompt
-    assert "same target_agent again" in prompt
-    assert "metadata.revision_reason" in prompt
-    assert "REFLECT" in prompt
+    assert "normal agent loop" in prompt
+    assert "sp_delegate" in prompt
+    assert "sp_reflect" in prompt
+    assert "sp_revise" in prompt
+    assert "Do not wrap" in prompt
+    assert "You are the StackPlanner 2.0 CentralAgent" in prompt
+    assert "DeerFlow is not your identity" in prompt
+    assert "Never introduce yourself as DeerFlow" in prompt

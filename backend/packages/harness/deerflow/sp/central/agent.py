@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -70,7 +71,12 @@ def _latest_user_input(state: Any) -> str:
 
 @dataclass(slots=True)
 class CentralAgentDecider:
-    """LLM-backed CentralAgent that only emits structured SP Action JSON."""
+    """Compatibility adapter for callers that still use the small ActionLoop.
+
+    The runtime path uses ``create_agent`` with SP control tools. This adapter
+    accepts the same tool-call or free-form outputs for older unit-level and
+    embedding callers without imposing JSON on the model.
+    """
 
     model: Any
 
@@ -89,10 +95,34 @@ class CentralAgentDecider:
                 HumanMessage(content="\n".join(user_parts)),
             ]
         )
+        tool_calls = getattr(response, "tool_calls", None) or []
+        if tool_calls:
+            from deerflow.sp.agent_tools import _action_payload
+
+            tool_call = tool_calls[0]
+            tool_name = str(tool_call.get("name") or "")
+            if tool_name.startswith("sp_"):
+                return _action_payload(
+                    tool_name,
+                    tool_call.get("args") or {},
+                    tool_call_id=str(tool_call.get("id") or uuid4().hex),
+                )
         decision_text = message_content_to_text(response.content)
         if not decision_text.strip():
             additional_kwargs = getattr(response, "additional_kwargs", {})
             reasoning_content = additional_kwargs.get("reasoning_content") if isinstance(additional_kwargs, dict) else None
             if isinstance(reasoning_content, str):
                 decision_text = reasoning_content
-        return _extract_json_object(decision_text)
+        try:
+            return _extract_json_object(decision_text)
+        except ValueError:
+            # Free-form replies are valid for simple conversational turns. The
+            # compatibility loop records them as a terminal FINISH action; the
+            # native runtime path returns them directly without this adapter.
+            return {
+                "action_id": f"sp-direct-{uuid4().hex}",
+                "action_type": "FINISH",
+                "reason": "Direct conversational response",
+                "task": decision_text.strip() or "Task completed.",
+                "metadata": {"allow_without_artifact": True},
+            }

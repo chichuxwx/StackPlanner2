@@ -16,6 +16,8 @@ def test_context_prioritizes_pinned_human_feedback_before_recent_memory():
     assert context.index("critical_feedback:") < context.index("recent_task_memory:")
     assert context.index("User requires CentralAgent") < context.index("Try the default")
     assert "priority_rules:" in context
+    assert "Memory order: critical_feedback and recent_task_memory first" in context
+    assert "Do not call sp_recall_memory" in context
 
 
 def test_context_is_bounded_and_clips_entry_content():

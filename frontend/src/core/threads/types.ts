@@ -42,6 +42,11 @@ export interface AgentThreadState extends Record<string, unknown> {
   sp_current_stage?: string | null;
   sp_active_delegate_id?: string | null;
   sp_current_artifact_refs?: Record<string, unknown> | null;
+  sp_last_handler_result?: {
+    action_type?: string;
+    action_id?: string;
+    next_step?: string;
+  } | null;
 }
 
 export interface AgentThreadContext extends Record<string, unknown> {

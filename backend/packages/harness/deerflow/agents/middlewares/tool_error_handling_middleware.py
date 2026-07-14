@@ -164,6 +164,7 @@ def _build_runtime_middlewares(
     from deerflow.agents.middlewares.thread_data_middleware import ThreadDataMiddleware
     from deerflow.agents.middlewares.tool_output_budget_middleware import ToolOutputBudgetMiddleware
     from deerflow.agents.middlewares.tool_result_sanitization_middleware import ToolResultSanitizationMiddleware
+    from deerflow.agents.middlewares.uploaded_file_search_guard import UploadedFileSearchGuardMiddleware
     from deerflow.sandbox.middleware import SandboxMiddleware
 
     # Layer 1 — outermost wrap_model_call wrappers (listed outer→inner).
@@ -179,6 +180,7 @@ def _build_runtime_middlewares(
         InputSanitizationMiddleware(),
         ToolOutputBudgetMiddleware.from_app_config(app_config),
         ToolResultSanitizationMiddleware(),
+        UploadedFileSearchGuardMiddleware(),
     ]
 
     # Layer 2 — before_agent hooks that read/annotate thread-scoped data.

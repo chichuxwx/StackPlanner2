@@ -85,6 +85,7 @@ class SPArtifactAdapter:
         filename_hint: str | None = None,
         summary: str | None = None,
         metadata: dict[str, Any] | None = None,
+        virtual_path_hint: str | None = None,
     ) -> SPArtifactWriteResult:
         """Write large SP content under DR2 outputs and return ThreadState refs."""
         payload = _serialize_content(content)
@@ -103,8 +104,13 @@ class SPArtifactAdapter:
         )
         artifact_id = f"spart_{hashlib.sha256(identity_payload.encode('utf-8')).hexdigest()[:16]}"
         extension = _extension_for_artifact(artifact_type, content)
-        name = filename_hint or f"{_safe_slug(artifact_type)}-v{effective_version}-{artifact_id}{extension}"
-        relative_path = Path("sp") / _safe_slug(artifact_type) / _safe_slug(name)
+        if virtual_path_hint is not None:
+            normalized_hint = _normalize_output_virtual_path(virtual_path_hint)
+            relative_path = Path(normalized_hint.removeprefix(f"{OUTPUTS_VIRTUAL_PREFIX}/"))
+            name = relative_path.name
+        else:
+            name = filename_hint or f"{_safe_slug(artifact_type)}-v{effective_version}-{artifact_id}{extension}"
+            relative_path = Path("sp") / _safe_slug(artifact_type) / _safe_slug(name)
         file_path = outputs_path / relative_path
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(payload, encoding="utf-8")
@@ -187,6 +193,7 @@ class SPArtifactAdapter:
     ) -> SPArtifactWriteResult:
         """Register a subagent-created DR2 workspace/output file without copying its body."""
         normalized_path = _normalize_existing_virtual_path(virtual_path)
+        self._require_existing_file(normalized_path, state=state, thread_id=thread_id)
         effective_version = self._next_version(state, artifact_type)
         identity_payload = json.dumps(
             {
@@ -218,6 +225,35 @@ class SPArtifactAdapter:
         if artifact_type in {"report", "report_revision", "final_report"}:
             state_update["sp_current_report_version"] = str(effective_version)
         return SPArtifactWriteResult(metadata=artifact_metadata, state_update=state_update)
+
+    def _require_existing_file(
+        self,
+        virtual_path: str,
+        *,
+        state: ThreadState | dict[str, Any],
+        thread_id: str | None,
+    ) -> Path:
+        """Resolve a registered path and reject stale artifact references."""
+        thread_data = state.get("thread_data") or {}
+        if virtual_path.startswith(f"{VIRTUAL_PATH_PREFIX}/outputs/"):
+            root_value = thread_data.get("outputs_path")
+            root = Path(str(root_value)).expanduser() if root_value else get_paths().sandbox_outputs_dir(thread_id or "")
+            prefix = f"{VIRTUAL_PATH_PREFIX}/outputs/"
+        else:
+            root_value = thread_data.get("workspace_path")
+            root = Path(str(root_value)).expanduser() if root_value else get_paths().sandbox_work_dir(thread_id or "")
+            prefix = f"{VIRTUAL_PATH_PREFIX}/workspace/"
+
+        root = root.resolve()
+        relative = PurePosixPath(virtual_path[len(prefix) :])
+        actual = (root / Path(*relative.parts)).resolve()
+        try:
+            actual.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("SP existing artifact path escapes its thread directory") from exc
+        if not actual.is_file():
+            raise ValueError(f"SP existing artifact file does not exist: {virtual_path}")
+        return actual
 
     def _outputs_path(self, state: ThreadState | dict[str, Any], *, thread_id: str | None) -> Path:
         thread_data = state.get("thread_data") or {}
@@ -309,6 +345,13 @@ def _normalize_existing_virtual_path(value: str) -> str:
     if ".." in path.parts:
         raise ValueError("SP existing artifact path cannot contain '..'")
     return path.as_posix()
+
+
+def _normalize_output_virtual_path(value: str) -> str:
+    normalized = _normalize_existing_virtual_path(value)
+    if not normalized.startswith(f"{OUTPUTS_VIRTUAL_PREFIX}/"):
+        raise ValueError("SP artifact content must be written under /mnt/user-data/outputs")
+    return normalized
 
 
 def _merge_state_updates(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:

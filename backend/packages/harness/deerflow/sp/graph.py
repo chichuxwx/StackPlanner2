@@ -295,12 +295,32 @@ def create_sp_agent_graph(
             thread_id=thread_id,
             run_id=run_id,
         )
+        fresh_user_turn = bool(_runtime_context(runtime).get("fresh_user_turn_after_terminal"))
+        if fresh_user_turn:
+            stack = TaskMemoryStack(
+                (
+                    entry
+                    for entry in stack.entries
+                    if entry.status == "pinned"
+                    or entry.priority == "critical"
+                    or (entry.status == "active" and entry.action in {"summarize", "finish"})
+                ),
+                max_size=stack.max_size,
+            )
         update: dict[str, Any] = {
             "sp_task_memory": stack.to_dict(),
             "sp_current_action": None,
             "sp_current_action_id": None,
             "sp_max_loop_iterations": max_iterations,
         }
+        if fresh_user_turn:
+            update.update(
+                {
+                    "sp_pending_human_interaction": None,
+                    "sp_current_artifact_refs": None,
+                    "sp_current_report_version": None,
+                }
+            )
         is_new_run = bool(run_id and state.get("sp_loop_run_id") != run_id)
         if is_new_run:
             update.update(

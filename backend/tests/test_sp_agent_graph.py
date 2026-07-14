@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from deerflow.sp import ActionRouter, ActionType, HandlerResult, SPAction, create_sp_agent_graph
@@ -280,7 +280,7 @@ def test_graph_restores_validated_action_from_dr2_checkpointer():
     assert len(decider.requests) == 1
 
 
-def test_runtime_factory_builds_and_runs_stackplanner_graph(monkeypatch):
+def test_runtime_factory_builds_single_sp_agent_with_control_tools(monkeypatch):
     class FakeAppConfig:
         models = [SimpleNamespace(name="test-model")]
         title = SimpleNamespace(enabled=True, max_chars=60)
@@ -290,25 +290,36 @@ def test_runtime_factory_builds_and_runs_stackplanner_graph(monkeypatch):
             assert name == "test-model"
             return SimpleNamespace(supports_thinking=False)
 
-    class FakeModel:
-        def invoke(self, messages):
-            return AIMessage(content=('{"action_id":"runtime-finish","action_type":"FINISH","reason":"runtime smoke","task":"Runtime graph works.","metadata":{"allow_without_artifact":true}}'))
+    captured = {}
 
-    monkeypatch.setattr("deerflow.sp.runtime.create_chat_model", lambda **kwargs: FakeModel())
-    monkeypatch.setattr("deerflow.sp.runtime.build_tracing_callbacks", lambda: [])
+    class FakeGraph:
+        metadata = {}
+
+    def fake_make_lead_agent(config, **kwargs):
+        captured.update({"config": config, **kwargs})
+        return FakeGraph()
+
+    monkeypatch.setattr("deerflow.agents.lead_agent.agent._make_lead_agent", fake_make_lead_agent)
     config = {"configurable": {"model_name": "test-model"}}
 
     graph = make_sp_agent(config, app_config=FakeAppConfig())
-    result = graph.invoke(
-        {"messages": [HumanMessage(content="Smoke test", id="user-1")]},
-        context={"thread_id": "thread-1", "run_id": "run-1"},
-    )
 
     assert graph.metadata["agent_name"] == "stackplanner"
     assert graph.metadata["model_name"] == "test-model"
     assert graph.metadata["thinking_enabled"] is False
-    assert result["messages"][-1].content == "Runtime graph works."
-    assert result["title"] == "Smoke test"
+    assert captured["identity_name"] == "StackPlanner 2.0"
+    assert {tool.name for tool in captured["extra_tools"]} == {
+        "sp_think",
+        "sp_delegate",
+        "sp_recall_memory",
+        "sp_reflect",
+        "sp_revise",
+        "sp_backtrack",
+        "sp_replan",
+        "sp_summarize",
+        "sp_ask_human",
+        "sp_finish",
+    }
 
 
 def test_runtime_factory_places_soul_in_system_and_memory_in_decision_input(monkeypatch):
@@ -320,17 +331,6 @@ def test_runtime_factory_places_soul_in_system_and_memory_in_decision_input(monk
         def get_model_config(name):
             return SimpleNamespace(supports_thinking=False)
 
-    class FakeModel:
-        def __init__(self):
-            self.calls = []
-
-        def invoke(self, messages):
-            self.calls.append(messages)
-            return AIMessage(
-                content='{"action_id":"runtime-finish","action_type":"FINISH","reason":"done","task":"Done.","metadata":{"allow_without_artifact":true}}'
-            )
-
-    model = FakeModel()
     captured = {}
 
     def fake_runtime_context(app_config, *, agent_name=None, user_id=None):
@@ -342,9 +342,17 @@ def test_runtime_factory_places_soul_in_system_and_memory_in_decision_input(monk
             available_skill_names=frozenset({"stackplanner-long-task"}),
         )
 
-    monkeypatch.setattr("deerflow.sp.runtime.create_chat_model", lambda **kwargs: model)
-    monkeypatch.setattr("deerflow.sp.runtime.build_tracing_callbacks", lambda: [])
     monkeypatch.setattr("deerflow.sp.runtime.build_sp_central_runtime_context", fake_runtime_context)
+    captured_agent = {}
+
+    class FakeGraph:
+        metadata = {}
+
+    def fake_make_lead_agent(config, **kwargs):
+        captured_agent.update({"config": config, **kwargs})
+        return FakeGraph()
+
+    monkeypatch.setattr("deerflow.agents.lead_agent.agent._make_lead_agent", fake_make_lead_agent)
     graph = make_sp_agent(
         {
             "configurable": {"model_name": "test-model"},
@@ -353,17 +361,9 @@ def test_runtime_factory_places_soul_in_system_and_memory_in_decision_input(monk
         app_config=FakeAppConfig(),
     )
 
-    graph.invoke(
-        {"messages": [HumanMessage(content="Prepare a report", id="user-1")]},
-        context={"thread_id": "thread-1", "run_id": "run-1"},
-    )
-
-    system_message, decision_message = model.calls[0]
-    assert isinstance(system_message, SystemMessage)
-    assert isinstance(decision_message, HumanMessage)
-    assert "Use concise academic language." in system_message.content
-    assert "Prefer Chinese." not in system_message.content
-    assert "Prefer Chinese." in decision_message.content
+    assert "Use concise academic language." in captured_agent["prompt_prefix"]
+    assert "Prefer Chinese." in captured_agent["prompt_prefix"]
+    assert captured_agent["identity_name"] == "StackPlanner 2.0"
     assert captured == {"agent_name": "sp-professor", "user_id": "user-1"}
     assert graph.metadata["available_skills"] == ["stackplanner-long-task"]
 

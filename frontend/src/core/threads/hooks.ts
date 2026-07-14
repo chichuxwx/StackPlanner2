@@ -1367,6 +1367,9 @@ export function useThreadStream({
             threadId: threadId,
             streamSubgraphs: true,
             streamResumable: true,
+            // Keep the run alive if the user navigates to another thread or
+            // the browser temporarily closes the SSE connection.
+            onDisconnect: "continue",
             config: {
               recursion_limit: 1000,
             },
@@ -1473,6 +1476,9 @@ export function useThreadStream({
           metadata: prepared.metadata,
           streamSubgraphs: true,
           streamResumable: true,
+          // Regeneration should also continue in the background when the
+          // current thread is no longer the visible conversation.
+          onDisconnect: "continue",
           config: {
             recursion_limit: 1000,
           },

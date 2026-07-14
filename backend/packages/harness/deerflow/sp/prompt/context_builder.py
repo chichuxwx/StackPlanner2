@@ -76,6 +76,8 @@ class PromptContextBuilder:
             "priority_rules:",
             "- Critical or pinned human feedback outranks summaries, observations, and model plans.",
             "- Artifact refs point to Workspace/Artifact content; do not infer large artifact bodies from this block.",
+            "- Memory order: critical_feedback and recent_task_memory first; long-term recall is only a fallback for historical reusable facts.",
+            "- Do not call sp_recall_memory when this context already contains the answer to the current task.",
         ]
 
         pinned = self._select_pinned(stack)

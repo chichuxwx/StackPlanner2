@@ -134,6 +134,26 @@ models:
   #       thinking:
   #         type: enabled
 
+  # Example: GLM-5.2 via Zhipu's OpenAI-compatible API
+  # - name: glm-5.2
+  #   display_name: GLM-5.2
+  #   use: langchain_openai:ChatOpenAI
+  #   model: glm-5.2
+  #   api_key: $GLM_API_KEY
+  #   base_url: https://open.bigmodel.cn/api/paas/v4
+  #   request_timeout: 180.0
+  #   max_retries: 1
+  #   max_tokens: 65536
+  #   temperature: 1.0
+  #   supports_thinking: true
+  #   supports_reasoning_effort: true
+  #   supports_vision: false
+  #   stream_chunk_timeout: 240.0
+  #   when_thinking_enabled:
+  #     extra_body:
+  #       thinking:
+  #         type: enabled
+
   # Example: OpenAI Responses API model
   # - name: gpt-5-responses
   #   display_name: GPT-5 (Responses API)
@@ -1397,6 +1417,7 @@ summarization:
 # Stores user context and conversation history for personalized responses
 memory:
   enabled: true
+  model_name: glm-5.2
   storage_path: memory.json # Path relative to backend directory
   debounce_seconds: 30 # Wait time before processing queued updates
   model_name: null # Use default model

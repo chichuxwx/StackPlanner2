@@ -205,7 +205,10 @@ def test_long_task_recovers_replans_versions_artifacts_and_resumes_after_human_f
     assert request["source"] == "stackplanner"
     assert interrupted["sp_pending_human_interaction"]["status"] == "pending"
     first_stack = TaskMemoryStack.from_dict(interrupted["sp_task_memory"])
-    assert any(entry.action == "error" and "timed out" in entry.content for entry in first_stack.entries)
+    assert any(
+        event["event_type"] == "sp.delegate.failed" and "timed out" in json.dumps(event, ensure_ascii=False)
+        for event in first_journal.events
+    )
     assert any(entry.action == "reflect" for entry in first_stack.entries)
     assert any(entry.action == "replan" for entry in first_stack.entries)
     assert any(entry.action == "summarize" for entry in first_stack.entries)

@@ -97,6 +97,36 @@ const SELECTION_TOOLBAR_MARGIN = 8;
 // needed because we flip below when space is tight.
 const SELECTION_TOOLBAR_ESTIMATED_HEIGHT = 48;
 
+function turnStartStorageKey(threadId: string) {
+  return `sp2:turn-start:${threadId}`;
+}
+
+function readTurnStartTime(threadId: string): number | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const value = Number(sessionStorage.getItem(turnStartStorageKey(threadId)));
+    return Number.isFinite(value) && value > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeTurnStartTime(threadId: string, value: number) {
+  try {
+    sessionStorage.setItem(turnStartStorageKey(threadId), String(value));
+  } catch {
+    // Session storage can be unavailable in private/restricted browser contexts.
+  }
+}
+
+function clearTurnStartTime(threadId: string) {
+  try {
+    sessionStorage.removeItem(turnStartStorageKey(threadId));
+  } catch {
+    // Session storage can be unavailable in private/restricted browser contexts.
+  }
+}
+
 type SelectionToolbarState = {
   context: SidecarContext;
   x: number;
@@ -262,14 +292,20 @@ export function MessageList({
   const [selectionToolbar, setSelectionToolbar] =
     useState<SelectionToolbarState | null>(null);
   const [turnStartTime, setTurnStartTime] = useState<number | null>(null);
-  const prevIsLoading = useRef(thread.isLoading);
 
   useEffect(() => {
-    if (thread.isLoading && !prevIsLoading.current) {
-      setTurnStartTime(Date.now());
+    if (thread.isLoading) {
+      const persisted = readTurnStartTime(threadId);
+      const start = persisted ?? Date.now();
+      setTurnStartTime(start);
+      if (!persisted) {
+        writeTurnStartTime(threadId, start);
+      }
+    } else {
+      setTurnStartTime(null);
+      clearTurnStartTime(threadId);
     }
-    prevIsLoading.current = thread.isLoading;
-  }, [thread.isLoading]);
+  }, [threadId, thread.isLoading]);
   const messages = thread.messages;
   const groupedMessages = getMessageGroups(messages);
   const [regeneratingMessageId, setRegeneratingMessageId] = useState<

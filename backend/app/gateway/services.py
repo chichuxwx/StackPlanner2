@@ -46,6 +46,7 @@ from deerflow.runtime.goal import goal_thread_lock
 from deerflow.runtime.runs.naming import resolve_root_run_name
 from deerflow.runtime.secret_context import redact_config_secrets
 from deerflow.runtime.user_context import reset_current_user, set_current_user
+from deerflow.utils.messages import message_to_text
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,59 @@ _TERMINAL_RUN_STATUSES = {
     RunStatus.timeout,
     RunStatus.interrupted,
 }
+
+_ABNORMAL_RUN_STATUSES = {
+    RunStatus.error,
+    RunStatus.timeout,
+    RunStatus.interrupted,
+}
+_CONTINUATION_MARKERS = (
+    "继续",
+    "接着",
+    "恢复",
+    "重试上次",
+    "继续上次",
+    "continue",
+    "resume",
+    "retry the previous",
+    "pick up where",
+)
+
+
+def _latest_user_input_text(raw_input: Any) -> str:
+    """Return the latest visible user message from a platform run input."""
+    if not isinstance(raw_input, Mapping):
+        return ""
+    messages = raw_input.get("messages")
+    if not isinstance(messages, list):
+        return ""
+    for message in reversed(messages):
+        if not isinstance(message, Mapping):
+            continue
+        role = str(message.get("role") or message.get("type") or "").lower()
+        if role not in {"human", "user"}:
+            continue
+        return " ".join(message_to_text(message).split())
+    return ""
+
+
+def _explicit_continuation_request(raw_input: Any) -> bool:
+    """Whether the user explicitly asked to resume the previous task."""
+    text = _latest_user_input_text(raw_input).lower()
+    if not text:
+        return False
+    if any(f"不要{marker}" in text for marker in ("继续", "接着", "恢复")):
+        return False
+    return any(marker in text for marker in _CONTINUATION_MARKERS)
+
+
+def _should_isolate_new_turn(raw_input: Any, previous_runs: list[RunRecord], command: Any) -> bool:
+    """Prevent a normal new message inheriting an unfinished failed run."""
+    if command and isinstance(command, Mapping) and command.get("resume") is not None:
+        return False
+    if not _latest_user_input_text(raw_input) or _explicit_continuation_request(raw_input):
+        return False
+    return bool(previous_runs and previous_runs[0].status in _ABNORMAL_RUN_STATUSES)
 
 
 # ---------------------------------------------------------------------------
@@ -592,6 +646,7 @@ async def start_run(
             )
 
     owner_user_id = get_trusted_internal_owner_user_id(request)
+    command = getattr(body, "command", None)
     # Stateless run endpoints carry thread_id in the request *body*, so the
     # @require_permission(owner_check=True) decorator -- which resolves ownership
     # from the path param -- cannot protect them. Enforce thread ownership here,
@@ -619,6 +674,8 @@ async def start_run(
     try:
         try:
             async with goal_thread_lock(thread_id):
+                previous_runs = await run_mgr.list_by_thread(thread_id, user_id=owner_user_id, limit=1)
+                isolate_new_turn = _should_isolate_new_turn(body.input, previous_runs, command)
                 record = await run_mgr.create_or_reject(
                     thread_id,
                     body.assistant_id,
@@ -661,7 +718,6 @@ async def start_run(
             logger.warning("Failed to upsert thread_meta for %s (non-fatal)", sanitize_log_param(thread_id))
 
         agent_factory = resolve_agent_factory(body.assistant_id)
-        command = getattr(body, "command", None)
         if command and command.get("resume") is not None:
             graph_input = Command(resume=command["resume"])
         else:
@@ -675,6 +731,16 @@ async def start_run(
         # Only agent-relevant keys are forwarded; unknown keys (e.g. thread_id) are ignored.
         is_internal_caller = getattr(getattr(request, "state", None), "auth_source", None) == AUTH_SOURCE_INTERNAL
         merge_run_context_overrides(config, getattr(body, "context", None), internal=is_internal_caller)
+        if isolate_new_turn:
+            runtime_context = config.setdefault("context", {})
+            if isinstance(runtime_context, dict):
+                runtime_context["fresh_user_turn_after_terminal"] = True
+            logger.info(
+                "Isolating new user turn %s from abnormal previous run %s on thread %s",
+                sanitize_log_param(record.run_id),
+                sanitize_log_param(previous_runs[0].run_id),
+                sanitize_log_param(thread_id),
+            )
         if not is_internal_caller:
             # ``body.config`` is free-form and copied verbatim by
             # ``build_run_config``; scrub internal-only keys smuggled there.

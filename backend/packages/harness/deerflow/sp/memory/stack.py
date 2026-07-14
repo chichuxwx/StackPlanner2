@@ -9,6 +9,9 @@ from typing import Any
 from deerflow.sp.memory.entry import StackMemoryEntry, utc_now_iso
 
 SP_TASK_MEMORY_VERSION = 1
+DEFAULT_SUMMARIZE_TRIGGER_ENTRIES = 18
+DEFAULT_SUMMARIZE_KEEP_RECENT = 6
+DEFAULT_SUMMARIZE_SOURCE_LIMIT = 6
 
 
 class TaskMemoryStack:
@@ -79,6 +82,38 @@ class TaskMemoryStack:
     def get_active_delegations(self) -> list[StackMemoryEntry]:
         return [entry for entry in self.get_active_entries() if entry.action == "delegate"]
 
+    def select_summarization_source_ids(
+        self,
+        *,
+        trigger_entries: int = DEFAULT_SUMMARIZE_TRIGGER_ENTRIES,
+        keep_recent: int = DEFAULT_SUMMARIZE_KEEP_RECENT,
+        source_limit: int = DEFAULT_SUMMARIZE_SOURCE_LIMIT,
+    ) -> list[str]:
+        """Select older non-critical active entries for automatic compaction.
+
+        The selected window sits immediately before the newest entries so the
+        CentralAgent has the source content in its bounded prompt context.
+        """
+        candidates = [entry for entry in self.entries if entry.status == "active" and entry.priority != "critical"]
+        if len(candidates) < trigger_entries or source_limit <= 0:
+            return []
+        end = max(0, len(candidates) - max(keep_recent, 0))
+        start = max(0, end - source_limit)
+        return [entry.id for entry in candidates[start:end]]
+
+    def select_explicit_summarization_source_ids(self) -> list[str]:
+        """Return every removable active entry for an explicit SUMMARIZE.
+
+        An explicit sp_summarize is a destructive compaction boundary: when
+        the model does not provide IDs, use the whole active non-critical
+        stack as the source window. Pinned/critical feedback is excluded.
+        """
+        return [
+            entry.id
+            for entry in self.entries
+            if entry.status == "active" and entry.priority != "critical"
+        ]
+
     def get_checkpoint(self, entry_id_or_stage: str) -> StackMemoryEntry | None:
         for entry in reversed(self.entries):
             if entry.id == entry_id_or_stage or entry.stage == entry_id_or_stage:
@@ -86,11 +121,21 @@ class TaskMemoryStack:
         return None
 
     def condense(self, source_entry_ids: list[str], summary: str, **kwargs: Any) -> StackMemoryEntry:
-        source_ids = set(source_entry_ids)
-        for entry in self.entries:
-            if entry.id in source_ids and entry.status != "pinned":
-                entry.status = "condensed"
-        return self.append_summary(summary, parent_ids=list(source_entry_ids), **kwargs)
+        """Pop source entries and append one summary entry.
+
+        Summarization is a compaction operation, not just a status update. The
+        selected entries leave the serialized stack so its size and the SP
+        Memory view actually decrease. Pinned entries remain available, while
+        the summary keeps the requested IDs as lineage metadata.
+        """
+        source_ids = list(dict.fromkeys(source_entry_ids))
+        source_id_set = set(source_ids)
+        self.entries = [
+            entry
+            for entry in self.entries
+            if entry.id not in source_id_set or entry.status == "pinned"
+        ]
+        return self.append_summary(summary, parent_ids=source_ids, **kwargs)
 
     def mark_backtracked(self, source_entry_ids: list[str], reason: str, **kwargs: Any) -> StackMemoryEntry:
         source_ids = set(source_entry_ids)
@@ -99,6 +144,41 @@ class TaskMemoryStack:
                 entry.status = "pruned"
                 entry.failure_note = reason
         return self.append_backtrack(reason, parent_ids=list(source_entry_ids), failure_note=reason, **kwargs)
+
+    def revise(self, source_entry_ids: list[str], correction: str, reason: str, **kwargs: Any) -> StackMemoryEntry:
+        """Logically pop incorrect entries and append their corrected replacement.
+
+        The old entries remain in the checkpoint for auditability, but their
+        ``superseded`` status keeps them out of the CentralAgent's active
+        context. Critical or pinned human feedback is immutable.
+        """
+        source_ids = list(dict.fromkeys(str(entry_id) for entry_id in source_entry_ids))
+        by_id = {entry.id: entry for entry in self.entries}
+        missing = [entry_id for entry_id in source_ids if entry_id not in by_id]
+        if missing:
+            raise ValueError(f"REVISE target memory entry not found: {', '.join(missing)}")
+
+        targets = [by_id[entry_id] for entry_id in source_ids]
+        protected = [entry.id for entry in targets if entry.status == "pinned" or entry.priority == "critical"]
+        if protected:
+            raise ValueError(f"REVISE cannot invalidate pinned or critical memory: {', '.join(protected)}")
+        inactive = [entry.id for entry in targets if entry.status != "active"]
+        if inactive:
+            raise ValueError(f"REVISE target memory is not active: {', '.join(inactive)}")
+
+        for entry in targets:
+            entry.status = "superseded"
+            entry.failure_note = reason
+
+        return self.append(
+            StackMemoryEntry(
+                action="revise",
+                content=correction,
+                parent_ids=source_ids,
+                failure_note=reason,
+                **kwargs,
+            )
+        )
 
     def prune(self, *, max_entries: int | None = None, max_chars: int | None = None) -> None:
         max_entries = max_entries if max_entries is not None else self.max_size
@@ -155,6 +235,10 @@ class TaskMemoryStack:
                 if run_id and entry.run_id is None:
                     entry.run_id = run_id
                 entries.append(entry)
+        # Older SP2 builds marked summarized entries as ``condensed`` instead
+        # of removing them. Normalize those checkpoints on restore so legacy
+        # sessions receive the same compact-stack semantics as new sessions.
+        entries = [entry for entry in entries if entry.status != "condensed"]
         return cls(entries, max_size=int(data.get("max_size") or max_size))
 
     @classmethod
